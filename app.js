@@ -105,6 +105,45 @@ function updateQuestionStats(id, isCorrect) {
 }
 
 // =====================================================================
+// EXAM DATE
+// =====================================================================
+function getExamDate() {
+  return localStorage.getItem('ppa_exam_date') || '2026-01-01';
+}
+
+function getDaysLeft() {
+  const examDate = new Date(getExamDate() + 'T00:00:00');
+  return Math.max(0, Math.ceil((examDate - new Date()) / 86400000));
+}
+
+function updateCountdownUI() {
+  const daysLeft = getDaysLeft();
+  document.getElementById('countdown-text').textContent = `距考試還有 ${daysLeft} 天`;
+  const mobileCountdown = document.getElementById('mobile-countdown');
+  if (mobileCountdown) mobileCountdown.textContent = `剩 ${daysLeft} 天`;
+}
+
+function openExamDateModal() {
+  document.getElementById('exam-date-input').value = getExamDate();
+  document.getElementById('exam-date-modal').classList.remove('hidden');
+}
+
+function closeExamDateModal() {
+  document.getElementById('exam-date-modal').classList.add('hidden');
+}
+
+function saveExamDate() {
+  const val = document.getElementById('exam-date-input').value;
+  if (!val) return;
+  localStorage.setItem('ppa_exam_date', val);
+  closeExamDateModal();
+  updateCountdownUI();
+  if (document.getElementById('nav-dashboard').classList.contains('bg-blue-50')) {
+    navigate('dashboard');
+  }
+}
+
+// =====================================================================
 // SIDEBAR (DESKTOP COLLAPSE + MOBILE MENU)
 // =====================================================================
 function toggleDesktopSidebar() {
@@ -185,8 +224,7 @@ function renderDashboard(container) {
   const coverage = total > 0 ? Math.round(seen / total * 100) : 0;
   const accuracy = totalAttempts > 0 ? Math.round(totalCorrect / totalAttempts * 100) : 0;
 
-  const examDate = new Date('2026-08-22T00:00:00');
-  const daysLeft = Math.max(0, Math.ceil((examDate - new Date()) / 86400000));
+  const daysLeft = getDaysLeft();
 
   const accColor = accuracy >= 80 ? 'text-green-600' : accuracy >= 60 ? 'text-yellow-500' : 'text-red-500';
 
@@ -642,6 +680,10 @@ document.getElementById('ai-modal').addEventListener('click', function(e) {
   if (e.target === this) closeAIModal();
 });
 
+document.getElementById('exam-date-modal').addEventListener('click', function(e) {
+  if (e.target === this) closeExamDateModal();
+});
+
 // =====================================================================
 // INIT
 // =====================================================================
@@ -666,11 +708,7 @@ function init() {
   applyFontSize(isNaN(savedSize) ? 1 : savedSize);
 
   // Countdown
-  const examDate = new Date('2026-08-22T00:00:00');
-  const daysLeft = Math.max(0, Math.ceil((examDate - new Date()) / 86400000));
-  document.getElementById('countdown-text').textContent = `距考試還有 ${daysLeft} 天`;
-  const mobileCountdown = document.getElementById('mobile-countdown');
-  if (mobileCountdown) mobileCountdown.textContent = `剩 ${daysLeft} 天`;
+  updateCountdownUI();
   document.getElementById('sidebar-total').textContent = `題庫共 ${questions.length} 題`;
 
   if (localStorage.getItem('ppa_sidebar_collapsed') === '1') {
