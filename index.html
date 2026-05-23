@@ -4,6 +4,14 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>採購法測驗助手</title>
+  <!-- Google Analytics 4 -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-HLLT22GC39"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+    gtag('config', 'G-HLLT22GC39');
+  </script>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
   <style>
@@ -11,7 +19,16 @@
     .nav-btn { transition: background-color 0.15s, color 0.15s; }
     .option-btn { transition: border-color 0.1s, background-color 0.1s; }
     #ai-modal { backdrop-filter: blur(2px); }
-    #sidebar { transition: transform 0.22s ease; }
+    #sidebar { transition: transform 0.22s ease, width 0.22s ease; overflow: hidden; }
+    @media (min-width: 768px) {
+      #sidebar.desktop-collapsed { width: 3.5rem; }
+      #sidebar.desktop-collapsed .sidebar-header-text,
+      #sidebar.desktop-collapsed .sidebar-label,
+      #sidebar.desktop-collapsed .sidebar-bottom { display: none; }
+      #sidebar.desktop-collapsed .sidebar-header { justify-content: center; padding-left: 0.5rem; padding-right: 0.5rem; }
+      #sidebar.desktop-collapsed .sidebar-nav { padding-left: 0.25rem; padding-right: 0.25rem; }
+      #sidebar.desktop-collapsed .nav-btn { display: flex; justify-content: center; padding-left: 0; padding-right: 0; }
+    }
   </style>
 </head>
 <body class="bg-gray-50 min-h-screen md:flex md:h-screen md:overflow-hidden">
@@ -38,31 +55,42 @@
   <nav id="sidebar"
     class="-translate-x-full fixed inset-y-0 left-0 w-64 z-40 bg-white border-r border-gray-200 flex flex-col shadow-xl
            md:translate-x-0 md:relative md:w-52 md:shadow-sm md:z-auto">
-    <div class="px-5 py-4 border-b border-gray-100">
-      <h1 class="text-base font-bold text-blue-700 leading-tight">採購法測驗助手</h1>
-      <p class="text-xs text-gray-400 mt-0.5" id="countdown-text">距考試日計算中…</p>
+    <div class="sidebar-header px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+      <div class="sidebar-header-text min-w-0 mr-2">
+        <h1 class="text-base font-bold text-blue-700 leading-tight">採購法測驗助手</h1>
+        <p class="text-xs text-gray-400 mt-0.5" id="countdown-text">距考試日計算中…</p>
+      </div>
+      <button onclick="toggleDesktopSidebar()" id="desktop-sidebar-toggle" title="收合側欄"
+        class="hidden md:flex items-center justify-center w-7 h-7 rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-600 shrink-0">
+        <svg id="sidebar-collapse-icon" xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 19l-7-7 7-7m8 14l-7-7 7-7"/>
+        </svg>
+        <svg id="sidebar-expand-icon" xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 hidden" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 5l7 7-7 7M5 5l7 7-7 7"/>
+        </svg>
+      </button>
     </div>
-    <ul class="flex-1 py-3 space-y-0.5 px-2">
+    <ul class="sidebar-nav flex-1 py-3 space-y-0.5 px-2">
       <li>
-        <button onclick="navigate('dashboard')" id="nav-dashboard"
-          class="nav-btn w-full text-left px-3 py-2.5 rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-100">
-          📊 數據看板
+        <button onclick="navigate('dashboard')" id="nav-dashboard" title="數據看板"
+          class="nav-btn w-full flex items-center gap-2 px-3 py-2.5 rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-100">
+          <span class="sidebar-icon">📊</span><span class="sidebar-label">數據看板</span>
         </button>
       </li>
       <li>
-        <button onclick="navigate('practice')" id="nav-practice"
-          class="nav-btn w-full text-left px-3 py-2.5 rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-100">
-          📝 單元刷題
+        <button onclick="navigate('practice')" id="nav-practice" title="單元刷題"
+          class="nav-btn w-full flex items-center gap-2 px-3 py-2.5 rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-100">
+          <span class="sidebar-icon">📝</span><span class="sidebar-label">單元刷題</span>
         </button>
       </li>
       <li>
-        <button onclick="navigate('review')" id="nav-review"
-          class="nav-btn w-full text-left px-3 py-2.5 rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-100">
-          🔁 錯題複習
+        <button onclick="navigate('review')" id="nav-review" title="錯題複習"
+          class="nav-btn w-full flex items-center gap-2 px-3 py-2.5 rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-100">
+          <span class="sidebar-icon">🔁</span><span class="sidebar-label">錯題複習</span>
         </button>
       </li>
     </ul>
-    <div class="px-4 pb-4 space-y-2">
+    <div class="sidebar-bottom px-4 pb-4 space-y-2">
       <div class="text-xs text-gray-400" id="sidebar-total"></div>
       <div class="flex items-center gap-1.5">
         <span class="text-xs text-gray-400 mr-0.5">字級</span>

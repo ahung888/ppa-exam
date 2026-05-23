@@ -105,8 +105,18 @@ function updateQuestionStats(id, isCorrect) {
 }
 
 // =====================================================================
-// MOBILE MENU
+// SIDEBAR (DESKTOP COLLAPSE + MOBILE MENU)
 // =====================================================================
+function toggleDesktopSidebar() {
+  const sidebar = document.getElementById('sidebar');
+  const isCollapsed = sidebar.classList.toggle('desktop-collapsed');
+  document.getElementById('sidebar-collapse-icon').classList.toggle('hidden', isCollapsed);
+  document.getElementById('sidebar-expand-icon').classList.toggle('hidden', !isCollapsed);
+  const toggle = document.getElementById('desktop-sidebar-toggle');
+  toggle.title = isCollapsed ? '展開側欄' : '收合側欄';
+  localStorage.setItem('ppa_sidebar_collapsed', isCollapsed ? '1' : '0');
+}
+
 function toggleMobileMenu() {
   const sidebar = document.getElementById('sidebar');
   const isOpen = !sidebar.classList.contains('-translate-x-full');
@@ -132,6 +142,10 @@ function closeMobileMenu() {
 // =====================================================================
 function navigate(view) {
   closeMobileMenu();
+
+  if (typeof gtag !== 'undefined') {
+    gtag('event', 'section_view', { section: view });
+  }
 
   if (chartInstance && view !== 'dashboard') {
     chartInstance.destroy();
@@ -658,6 +672,13 @@ function init() {
   const mobileCountdown = document.getElementById('mobile-countdown');
   if (mobileCountdown) mobileCountdown.textContent = `剩 ${daysLeft} 天`;
   document.getElementById('sidebar-total').textContent = `題庫共 ${questions.length} 題`;
+
+  if (localStorage.getItem('ppa_sidebar_collapsed') === '1') {
+    document.getElementById('sidebar').classList.add('desktop-collapsed');
+    document.getElementById('sidebar-collapse-icon').classList.add('hidden');
+    document.getElementById('sidebar-expand-icon').classList.remove('hidden');
+    document.getElementById('desktop-sidebar-toggle').title = '展開側欄';
+  }
 
   navigate('dashboard');
 }
