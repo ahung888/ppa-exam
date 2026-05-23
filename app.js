@@ -105,9 +105,34 @@ function updateQuestionStats(id, isCorrect) {
 }
 
 // =====================================================================
+// MOBILE MENU
+// =====================================================================
+function toggleMobileMenu() {
+  const sidebar = document.getElementById('sidebar');
+  const isOpen = !sidebar.classList.contains('-translate-x-full');
+  if (isOpen) closeMobileMenu(); else openMobileMenu();
+}
+
+function openMobileMenu() {
+  document.getElementById('sidebar').classList.remove('-translate-x-full');
+  document.getElementById('mobile-overlay').classList.remove('hidden');
+  document.getElementById('menu-icon-open').classList.add('hidden');
+  document.getElementById('menu-icon-close').classList.remove('hidden');
+}
+
+function closeMobileMenu() {
+  document.getElementById('sidebar').classList.add('-translate-x-full');
+  document.getElementById('mobile-overlay').classList.add('hidden');
+  document.getElementById('menu-icon-open').classList.remove('hidden');
+  document.getElementById('menu-icon-close').classList.add('hidden');
+}
+
+// =====================================================================
 // NAVIGATION
 // =====================================================================
 function navigate(view) {
+  closeMobileMenu();
+
   if (chartInstance && view !== 'dashboard') {
     chartInstance.destroy();
     chartInstance = null;
@@ -157,18 +182,18 @@ function renderDashboard(container) {
         <h2 class="text-xl font-bold text-gray-800">數據看板</h2>
         <span class="text-sm text-gray-500">距考試還有 <strong class="text-red-500">${daysLeft}</strong> 天</span>
       </div>
-      <div class="grid grid-cols-2 gap-4 mb-6">
-        <div class="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
+      <div class="grid grid-cols-2 gap-3 md:gap-4 mb-5 md:mb-6">
+        <div class="bg-white rounded-2xl p-4 md:p-6 shadow-sm border border-gray-100">
           <div class="text-xs text-gray-400 mb-1 uppercase tracking-wide">全題庫覆蓋率</div>
-          <div class="text-5xl font-bold text-blue-600">${coverage}<span class="text-2xl">%</span></div>
-          <div class="text-xs text-gray-400 mt-2">${seen} / ${total} 題已練習</div>
-          <div class="mt-3 h-1.5 bg-gray-100 rounded-full"><div class="h-1.5 bg-blue-400 rounded-full" style="width:${coverage}%"></div></div>
+          <div class="text-3xl md:text-5xl font-bold text-blue-600">${coverage}<span class="text-lg md:text-2xl">%</span></div>
+          <div class="text-xs text-gray-400 mt-1.5">${seen} / ${total} 題</div>
+          <div class="mt-2 h-1.5 bg-gray-100 rounded-full"><div class="h-1.5 bg-blue-400 rounded-full" style="width:${coverage}%"></div></div>
         </div>
-        <div class="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
-          <div class="text-xs text-gray-400 mb-1 uppercase tracking-wide">整體答題正確率</div>
-          <div class="text-5xl font-bold ${accColor}">${accuracy}<span class="text-2xl">%</span></div>
-          <div class="text-xs text-gray-400 mt-2">${totalCorrect} / ${totalAttempts} 次答對</div>
-          <div class="mt-3 h-1.5 bg-gray-100 rounded-full"><div class="h-1.5 ${accuracy >= 80 ? 'bg-green-400' : accuracy >= 60 ? 'bg-yellow-400' : 'bg-red-400'} rounded-full" style="width:${accuracy}%"></div></div>
+        <div class="bg-white rounded-2xl p-4 md:p-6 shadow-sm border border-gray-100">
+          <div class="text-xs text-gray-400 mb-1 uppercase tracking-wide">整體正確率</div>
+          <div class="text-3xl md:text-5xl font-bold ${accColor}">${accuracy}<span class="text-lg md:text-2xl">%</span></div>
+          <div class="text-xs text-gray-400 mt-1.5">${totalCorrect} / ${totalAttempts} 次</div>
+          <div class="mt-2 h-1.5 bg-gray-100 rounded-full"><div class="h-1.5 ${accuracy >= 80 ? 'bg-green-400' : accuracy >= 60 ? 'bg-yellow-400' : 'bg-red-400'} rounded-full" style="width:${accuracy}%"></div></div>
         </div>
       </div>
       <div class="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
@@ -630,6 +655,8 @@ function init() {
   const examDate = new Date('2026-08-22T00:00:00');
   const daysLeft = Math.max(0, Math.ceil((examDate - new Date()) / 86400000));
   document.getElementById('countdown-text').textContent = `距考試還有 ${daysLeft} 天`;
+  const mobileCountdown = document.getElementById('mobile-countdown');
+  if (mobileCountdown) mobileCountdown.textContent = `剩 ${daysLeft} 天`;
   document.getElementById('sidebar-total').textContent = `題庫共 ${questions.length} 題`;
 
   navigate('dashboard');
