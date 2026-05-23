@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>採購法測驗助手</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang TC', 'Microsoft JhengHei', sans-serif; }
+    .nav-btn { transition: background-color 0.15s, color 0.15s; }
+    .option-btn { transition: border-color 0.1s, background-color 0.1s; }
+    #ai-modal { backdrop-filter: blur(2px); }
+  </style>
+</head>
+<body class="bg-gray-50 flex h-screen overflow-hidden">
+
+  <!-- Sidebar -->
+  <nav class="w-52 bg-white border-r border-gray-200 flex flex-col shrink-0 shadow-sm">
+    <div class="px-5 py-4 border-b border-gray-100">
+      <h1 class="text-base font-bold text-blue-700 leading-tight">採購法測驗助手</h1>
+      <p class="text-xs text-gray-400 mt-0.5" id="countdown-text">距考試日計算中…</p>
+    </div>
+    <ul class="flex-1 py-3 space-y-0.5 px-2">
+      <li>
+        <button onclick="navigate('dashboard')" id="nav-dashboard"
+          class="nav-btn w-full text-left px-3 py-2.5 rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-100">
+          📊 數據看板
+        </button>
+      </li>
+      <li>
+        <button onclick="navigate('practice')" id="nav-practice"
+          class="nav-btn w-full text-left px-3 py-2.5 rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-100">
+          📝 單元刷題
+        </button>
+      </li>
+      <li>
+        <button onclick="navigate('review')" id="nav-review"
+          class="nav-btn w-full text-left px-3 py-2.5 rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-100">
+          🔁 錯題複習
+        </button>
+      </li>
+    </ul>
+    <div class="px-4 pb-4 space-y-2">
+      <div class="text-xs text-gray-400" id="sidebar-total"></div>
+      <div class="flex items-center gap-1.5">
+        <span class="text-xs text-gray-400 mr-0.5">字級</span>
+        <button onclick="setFontSize(0)" id="font-btn-0"
+          class="w-7 h-7 rounded-lg border text-xs font-medium leading-none transition-colors">A</button>
+        <button onclick="setFontSize(1)" id="font-btn-1"
+          class="w-7 h-7 rounded-lg border text-sm font-medium leading-none transition-colors">A</button>
+        <button onclick="setFontSize(2)" id="font-btn-2"
+          class="w-7 h-7 rounded-lg border text-base font-medium leading-none transition-colors">A</button>
+        <button onclick="setFontSize(3)" id="font-btn-3"
+          class="w-7 h-7 rounded-lg border text-lg font-medium leading-none transition-colors">A</button>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Main content -->
+  <main id="app-content" class="flex-1 overflow-y-auto p-6">
+  </main>
+
+  <!-- AI Modal -->
+  <div id="ai-modal" class="hidden fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50 p-4">
+    <div class="bg-white rounded-2xl shadow-2xl w-full max-w-lg">
+      <div class="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+        <h3 class="font-semibold text-gray-800">🤖 AI 老師提示詞</h3>
+        <button onclick="closeAIModal()" class="text-gray-400 hover:text-gray-600 text-xl leading-none">&times;</button>
+      </div>
+      <div class="px-6 py-4">
+        <p class="text-xs text-gray-500 mb-2">複製後貼到 ChatGPT / Claude 等 AI 助手詢問</p>
+        <textarea id="ai-prompt-text" readonly
+          class="w-full h-52 text-xs text-gray-700 border border-gray-200 rounded-xl p-3 font-mono resize-none leading-relaxed bg-gray-50 focus:outline-none"></textarea>
+      </div>
+      <div class="px-6 pb-5 flex items-center gap-3">
+        <button onclick="copyAIPrompt()"
+          class="flex-1 py-2.5 bg-blue-600 text-white rounded-xl text-sm font-medium hover:bg-blue-700">
+          📋 複製到剪貼簿
+        </button>
+        <button onclick="closeAIModal()"
+          class="px-5 py-2.5 border border-gray-200 text-gray-600 rounded-xl text-sm hover:bg-gray-50">
+          關閉
+        </button>
+      </div>
+      <p id="ai-copy-status" class="hidden text-xs text-green-600 text-center pb-4">✓ 已複製！</p>
+    </div>
+  </div>
+
+  <script src="data/questions.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
