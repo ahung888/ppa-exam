@@ -269,7 +269,7 @@ function renderPractice(container) {
   container.innerHTML = `
     <div class="max-w-2xl mx-auto">
       <h2 class="text-xl font-bold text-gray-800 mb-5">單元刷題</h2>
-      <div class="flex gap-3 mb-5">
+      <div class="flex flex-wrap gap-3 mb-5">
         <select id="filter-topic" onchange="onPracticeFilterChange()"
           class="flex-1 px-3 py-2 border border-gray-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-200">
           <option value="all">全部章節</option>
