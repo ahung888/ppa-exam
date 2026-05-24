@@ -9,14 +9,16 @@ let practiceQueue = [];
 let practiceIndex = 0;
 let practiceAnswered = false;
 let practiceUserAnswer = null;
-let practiceFilters = { topic: 'all', type: 'all' };
+let practiceFilters = { topic: 'all', type: 'all', order: 'random' };
 
 let reviewQueue = [];
 let reviewIndex = 0;
 let reviewAnswered = false;
 let reviewUserAnswer = null;
+let reviewFilters = { topics: [], order: 'srs' };
 
 let currentAIQuestion = null;
+let _topicDropdownHandler = null;
 
 const FONT_SIZES = ['15px', '17px', '19px', '21px'];
 
@@ -76,12 +78,40 @@ function applyFontSize(index) {
 // =====================================================================
 // STORAGE & SRS
 // =====================================================================
+let MASTERY_THRESHOLD = 3;
+
+function loadMasteryThreshold() {
+  const n = parseInt(localStorage.getItem('ppa_mastery_threshold') ?? '3', 10);
+  MASTERY_THRESHOLD = isNaN(n) ? 3 : Math.max(2, Math.min(10, n));
+}
+
+function saveMasteryThreshold(val) {
+  const n = parseInt(val, 10);
+  if (isNaN(n) || n < 2 || n > 10) return;
+  MASTERY_THRESHOLD = n;
+  localStorage.setItem('ppa_mastery_threshold', String(n));
+}
+
 function loadProgress() {
   try {
     progress = JSON.parse(localStorage.getItem('ppa_progress') || '{}');
   } catch {
     progress = {};
   }
+  migrateProgress();
+}
+
+function migrateProgress() {
+  let dirty = false;
+  for (const id in progress) {
+    const s = progress[id];
+    if (s.consecutive_correct === undefined) {
+      s.consecutive_correct = (s.wrong_count || 0) === 0 && (s.correct_count || 0) > 0
+        ? s.correct_count : 0;
+      dirty = true;
+    }
+  }
+  if (dirty) saveProgress();
 }
 
 function saveProgress() {
@@ -90,12 +120,17 @@ function saveProgress() {
 
 function updateQuestionStats(id, isCorrect) {
   const today = todayStr();
-  const stat = progress[id] || { wrong_count: 0, correct_count: 0, interval_days: 1 };
+  const stat = progress[id] || { wrong_count: 0, correct_count: 0, interval_days: 1, consecutive_correct: 0 };
   if (isCorrect) {
     stat.correct_count = (stat.correct_count || 0) + 1;
-    stat.interval_days = Math.min((stat.interval_days || 1) * 2, 30);
+    stat.consecutive_correct = (stat.consecutive_correct || 0) + 1;
+    const mastered = stat.consecutive_correct >= MASTERY_THRESHOLD;
+    const cap = mastered ? 90 : 30;
+    const factor = mastered ? 3 : 2;
+    stat.interval_days = Math.min((stat.interval_days || 1) * factor, cap);
   } else {
     stat.wrong_count = (stat.wrong_count || 0) + 1;
+    stat.consecutive_correct = 0;
     stat.interval_days = 1;
   }
   stat.last_seen = today;
@@ -191,7 +226,7 @@ function navigate(view) {
     chartInstance = null;
   }
 
-  ['dashboard', 'practice', 'review'].forEach(v => {
+  ['dashboard', 'practice', 'review', 'author'].forEach(v => {
     const btn = document.getElementById(`nav-${v}`);
     if (!btn) return;
     btn.classList.toggle('bg-blue-50', v === view);
@@ -204,6 +239,39 @@ function navigate(view) {
   if (view === 'dashboard') renderDashboard(content);
   else if (view === 'practice') renderPractice(content);
   else if (view === 'review') renderReview(content);
+  else if (view === 'author') renderAuthor(content);
+}
+
+// =====================================================================
+// AUTHOR
+// =====================================================================
+function renderAuthor(container) {
+  container.innerHTML = `
+    <div class="max-w-2xl mx-auto space-y-4 py-2">
+      <h2 class="text-xl font-bold text-gray-800 px-1">關於作者</h2>
+
+      <div class="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 flex items-center gap-4">
+        <img src="icons/author.svg" alt="作者頭像" class="w-16 h-16 rounded-full">
+        <div>
+          <div class="text-lg font-bold text-gray-800">yunhung</div>
+          <div class="text-sm text-gray-500 mt-1">碼農出生，AI時代後開始用嘴砲解決問題。</div>
+        </div>
+      </div>
+
+      <div class="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
+        <div class="text-xs text-gray-400 uppercase tracking-wide mb-2">製作動機</div>
+        <p class="text-sm text-gray-700 leading-relaxed">
+          準備採購法考試時找不到好用的練習工具，因此自己動口做一個。
+        </p>
+      </div>
+
+      <div class="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
+        <div class="text-xs text-gray-400 uppercase tracking-wide mb-2">聯絡方式</div>
+        <a href="mailto:yunhung2000@gmail.com"
+           class="text-sm text-blue-600 hover:underline">yunhung2000@gmail.com</a>
+      </div>
+    </div>
+  `;
 }
 
 // =====================================================================
@@ -320,19 +388,34 @@ function renderPractice(container) {
 
   container.innerHTML = `
     <div class="max-w-2xl mx-auto">
-      <h2 class="text-xl font-bold text-gray-800 mb-5">單元刷題</h2>
-      <div class="flex flex-wrap gap-3 mb-5">
+      <h2 class="text-xl font-bold text-gray-800 mb-4">單元刷題</h2>
+      <div class="flex items-center gap-2 mb-5 flex-wrap">
         <select id="filter-topic" onchange="onPracticeFilterChange()"
-          class="flex-1 px-3 py-2 border border-gray-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-200">
+          class="flex-1 min-w-[80px] px-3 py-2 border border-gray-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-200">
           <option value="all">全部章節</option>
           ${topics.map(t => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('')}
         </select>
         <select id="filter-type" onchange="onPracticeFilterChange()"
-          class="w-28 px-3 py-2 border border-gray-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-200">
+          class="px-3 py-2 border border-gray-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-200">
           <option value="all">全部題型</option>
           <option value="tf">是非題</option>
           <option value="mc">選擇題</option>
         </select>
+        <div class="flex shrink-0">
+          <button id="pill-normal" onclick="setPracticeOrder('normal')"
+            class="px-3 py-2 border border-gray-200 rounded-l-xl text-sm leading-none">正常</button>
+          <button id="pill-unanswered" onclick="setPracticeOrder('unanswered')"
+            class="px-3 py-2 border-t border-b border-r border-gray-200 text-sm leading-none">未答</button>
+          <button id="pill-random" onclick="setPracticeOrder('random')"
+            class="px-3 py-2 border-t border-b border-r border-gray-200 rounded-r-xl text-sm leading-none">隨機</button>
+        </div>
+        <button onclick="initPracticeQueue()" title="重新出題"
+          class="shrink-0 w-9 h-9 flex items-center justify-center border border-gray-200 rounded-xl text-gray-500 hover:bg-gray-100">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+              d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+          </svg>
+        </button>
       </div>
       <div id="practice-card"></div>
     </div>
@@ -340,6 +423,7 @@ function renderPractice(container) {
 
   document.getElementById('filter-topic').value = practiceFilters.topic;
   document.getElementById('filter-type').value = practiceFilters.type;
+  updatePracticePills();
 
   if (practiceQueue.length === 0) {
     initPracticeQueue();
@@ -350,17 +434,47 @@ function renderPractice(container) {
 
 function onPracticeFilterChange() {
   practiceFilters.topic = document.getElementById('filter-topic').value;
-  practiceFilters.type = document.getElementById('filter-type').value;
+  practiceFilters.type  = document.getElementById('filter-type').value;
   initPracticeQueue();
 }
 
+function setPracticeOrder(order) {
+  practiceFilters.order = order;
+  updatePracticePills();
+  initPracticeQueue();
+}
+
+function updatePracticePills() {
+  ['normal', 'unanswered', 'random'].forEach(o => {
+    const btn = document.getElementById(`pill-${o}`);
+    if (!btn) return;
+    const active = practiceFilters.order === o;
+    btn.classList.toggle('bg-blue-50',    active);
+    btn.classList.toggle('text-blue-700', active);
+    btn.classList.toggle('border-blue-500', active);
+    btn.classList.toggle('text-gray-600', !active);
+    btn.classList.toggle('font-medium',   active);
+  });
+}
+
 function initPracticeQueue() {
-  const filtered = questions.filter(q => {
+  practiceFilters.topic = document.getElementById('filter-topic')?.value ?? practiceFilters.topic;
+  practiceFilters.type  = document.getElementById('filter-type')?.value  ?? practiceFilters.type;
+
+  let filtered = questions.filter(q => {
     if (practiceFilters.topic !== 'all' && q.topic !== practiceFilters.topic) return false;
     if (practiceFilters.type !== 'all' && q.type !== practiceFilters.type) return false;
     return true;
   });
-  practiceQueue = shuffle(filtered);
+
+  if (practiceFilters.order === 'unanswered') {
+    filtered = filtered.filter(q => {
+      const s = progress[q.id];
+      return !s || ((s.correct_count || 0) + (s.wrong_count || 0)) === 0;
+    });
+  }
+
+  practiceQueue = practiceFilters.order === 'random' ? shuffle(filtered) : [...filtered];
   practiceIndex = 0;
   practiceAnswered = false;
   practiceUserAnswer = null;
@@ -372,16 +486,52 @@ function renderPracticeCard() {
   if (!card) return;
 
   if (practiceQueue.length === 0) {
-    card.innerHTML = emptyCard('沒有符合條件的題目');
+    if (practiceFilters.order === 'unanswered') {
+      card.innerHTML = practiceUnansweredCompletionCard();
+    } else {
+      card.innerHTML = emptyCard('沒有符合條件的題目');
+    }
     return;
   }
   if (practiceIndex >= practiceQueue.length) {
-    card.innerHTML = completionCard(practiceQueue.length, 'initPracticeQueue()');
+    if (practiceFilters.order === 'unanswered') {
+      card.innerHTML = practiceUnansweredCompletionCard();
+    } else {
+      card.innerHTML = completionCard(practiceQueue.length, 'initPracticeQueue()');
+    }
     return;
   }
 
   const q = practiceQueue[practiceIndex];
   card.innerHTML = renderQuestionCard(q, practiceIndex + 1, practiceQueue.length, practiceAnswered, practiceUserAnswer, false);
+}
+
+function practiceUnansweredCompletionCard() {
+  const scopeFiltered = questions.filter(q => {
+    if (practiceFilters.topic !== 'all' && q.topic !== practiceFilters.topic) return false;
+    if (practiceFilters.type !== 'all' && q.type !== practiceFilters.type) return false;
+    return true;
+  });
+  const total = scopeFiltered.length;
+  const answered = scopeFiltered.filter(q => {
+    const s = progress[q.id];
+    return s && ((s.correct_count || 0) + (s.wrong_count || 0)) > 0;
+  }).length;
+  const pct = total > 0 ? Math.round(answered / total * 100) : 0;
+  return `
+    <div class="bg-white rounded-2xl p-10 text-center shadow-sm border border-gray-100">
+      <div class="text-2xl mb-2">✓</div>
+      <div class="font-semibold text-gray-700 mb-1">未答過題已全部作答完畢！</div>
+      <div class="text-sm text-gray-500 mb-3">已答題進度：${answered} / ${total} 題</div>
+      <div class="w-full bg-gray-100 rounded-full h-2 mb-2">
+        <div class="bg-blue-500 h-2 rounded-full" style="width:${pct}%"></div>
+      </div>
+      <div class="text-2xl font-bold text-blue-600 mb-6">${pct}%</div>
+      <button onclick="initPracticeQueue()"
+        class="px-6 py-2.5 bg-blue-600 text-white rounded-xl text-sm font-medium hover:bg-blue-700">
+        重新出題
+      </button>
+    </div>`;
 }
 
 function answerPractice(answer) {
@@ -405,46 +555,200 @@ function nextPracticeQuestion() {
 // REVIEW CENTER
 // =====================================================================
 function renderReview(container) {
-  const today = todayStr();
-  const wrongQuestions = questions.filter(q => {
-    const s = progress[q.id];
-    return s && (s.wrong_count || 0) > 0;
-  });
-
-  wrongQuestions.sort((a, b) => {
-    const sa = progress[a.id] || {};
-    const sb = progress[b.id] || {};
-    const aDue = (sa.next_review || today) <= today ? 0 : 1;
-    const bDue = (sb.next_review || today) <= today ? 0 : 1;
-    if (aDue !== bDue) return aDue - bDue;
-    return (sa.next_review || '').localeCompare(sb.next_review || '');
-  });
-
-  const dueCount = wrongQuestions.filter(q => {
-    const s = progress[q.id];
-    return !s || !s.next_review || s.next_review <= today;
-  }).length;
-
-  reviewQueue = wrongQuestions;
-  if (!reviewAnswered || reviewIndex >= reviewQueue.length) {
-    reviewIndex = 0;
-    reviewAnswered = false;
-    reviewUserAnswer = null;
-  }
+  const topics = [...new Set(questions.map(q => q.topic))].sort();
 
   container.innerHTML = `
     <div class="max-w-2xl mx-auto">
-      <div class="flex items-center justify-between mb-5">
+      <div class="flex items-center justify-between mb-4">
         <h2 class="text-xl font-bold text-gray-800">錯題複習</h2>
-        <span class="text-sm text-amber-600 bg-amber-50 px-3 py-1 rounded-full">
-          今日待複習：<strong>${dueCount}</strong> 題
-        </span>
+        <span id="review-due-badge" class="text-sm text-amber-600 bg-amber-50 px-3 py-1 rounded-full shrink-0 ml-3"></span>
+      </div>
+      <div class="flex flex-wrap gap-2 mb-5">
+        <div class="relative" id="topic-dropdown-container">
+          <button onclick="toggleTopicDropdown()" id="topic-dropdown-btn"
+            class="flex items-center gap-1 px-3 py-2 border border-gray-200 rounded-xl text-sm bg-white hover:border-blue-300 focus:outline-none focus:ring-2 focus:ring-blue-200 whitespace-nowrap">
+            <span id="topic-dropdown-label">章節：全部</span>
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-3.5 w-3.5 text-gray-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+            </svg>
+          </button>
+          <div id="topic-dropdown-panel" class="hidden absolute z-20 top-full mt-1 left-0 bg-white border border-gray-200 rounded-xl shadow-lg p-2 w-56 max-h-64 overflow-y-auto">
+            <label class="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-gray-50 cursor-pointer select-none">
+              <input type="checkbox" id="topic-all-cb" onchange="onTopicAllChange()">
+              <span class="text-sm font-medium text-gray-700">全選</span>
+            </label>
+            <div class="border-t border-gray-100 my-1"></div>
+            ${topics.map(t => `
+              <label class="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-gray-50 cursor-pointer select-none">
+                <input type="checkbox" class="topic-cb" value="${escapeHtml(t)}" onchange="onTopicCbChange()">
+                <span class="text-sm text-gray-700 truncate" title="${escapeHtml(t)}">${escapeHtml(t)}</span>
+              </label>`).join('')}
+          </div>
+        </div>
+        <div class="flex shrink-0">
+          <button id="review-pill-srs" onclick="setReviewOrder('srs')"
+            class="px-3 py-2 border border-gray-200 rounded-l-xl text-sm leading-none">不熟練</button>
+          <button id="review-pill-random" onclick="setReviewOrder('random')"
+            class="px-3 py-2 border-t border-b border-r border-gray-200 rounded-r-xl text-sm leading-none">隨機</button>
+        </div>
+        <button onclick="initReviewQueue()" title="重新出題"
+          class="shrink-0 w-9 h-9 flex items-center justify-center border border-gray-200 rounded-xl text-gray-500 hover:bg-gray-100">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+              d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+          </svg>
+        </button>
       </div>
       <div id="review-card"></div>
     </div>
   `;
 
+  // Restore filter state into DOM
+  updateReviewPills();
+  document.querySelectorAll('.topic-cb').forEach(cb => {
+    cb.checked = reviewFilters.topics.length === 0 || reviewFilters.topics.includes(cb.value);
+  });
+  const checkedCount = [...document.querySelectorAll('.topic-cb')].filter(cb => cb.checked).length;
+  const allCb = document.getElementById('topic-all-cb');
+  allCb.checked = checkedCount === topics.length;
+  allCb.indeterminate = checkedCount > 0 && checkedCount < topics.length;
+  updateTopicDropdownLabel();
+
+  // Close dropdown on outside click
+  if (_topicDropdownHandler) document.removeEventListener('click', _topicDropdownHandler);
+  _topicDropdownHandler = (e) => {
+    const cont = document.getElementById('topic-dropdown-container');
+    if (cont && !cont.contains(e.target)) {
+      const panel = document.getElementById('topic-dropdown-panel');
+      if (panel) panel.classList.add('hidden');
+    }
+  };
+  document.addEventListener('click', _topicDropdownHandler);
+
+  buildReviewQueue(true);
+}
+
+function toggleTopicDropdown() {
+  document.getElementById('topic-dropdown-panel').classList.toggle('hidden');
+}
+
+function onTopicAllChange() {
+  const allCb = document.getElementById('topic-all-cb');
+  document.querySelectorAll('.topic-cb').forEach(cb => { cb.checked = allCb.checked; });
+  allCb.indeterminate = false;
+  updateTopicDropdownLabel();
+  buildReviewQueue(false);
+}
+
+function onTopicCbChange() {
+  const cbs = [...document.querySelectorAll('.topic-cb')];
+  const n = cbs.filter(cb => cb.checked).length;
+  const allCb = document.getElementById('topic-all-cb');
+  allCb.checked = n === cbs.length;
+  allCb.indeterminate = n > 0 && n < cbs.length;
+  updateTopicDropdownLabel();
+  buildReviewQueue(false);
+}
+
+function setReviewOrder(order) {
+  reviewFilters.order = order;
+  updateReviewPills();
+  buildReviewQueue(false);
+}
+
+function updateReviewPills() {
+  ['srs', 'random'].forEach(o => {
+    const btn = document.getElementById(`review-pill-${o}`);
+    if (!btn) return;
+    const active = reviewFilters.order === o;
+    btn.classList.toggle('bg-blue-50',     active);
+    btn.classList.toggle('text-blue-700',  active);
+    btn.classList.toggle('border-blue-500', active);
+    btn.classList.toggle('text-gray-600',  !active);
+    btn.classList.toggle('font-medium',    active);
+  });
+}
+
+function updateTopicDropdownLabel() {
+  const cbs = [...document.querySelectorAll('.topic-cb')];
+  const n = cbs.filter(cb => cb.checked).length;
+  const label = document.getElementById('topic-dropdown-label');
+  if (!label) return;
+  label.textContent = (n === 0 || n === cbs.length) ? '章節：全部' : `章節：${n} 已選`;
+}
+
+function updateReviewDueBadge() {
+  const today = todayStr();
+  const badge = document.getElementById('review-due-badge');
+  if (!badge) return;
+  const filtered = questions.filter(q => {
+    const s = progress[q.id];
+    if (!s || (s.wrong_count || 0) === 0) return false;
+    if (reviewFilters.topics.length > 0 && !reviewFilters.topics.includes(q.topic)) return false;
+    return true;
+  });
+  const dueCount = filtered.filter(q => {
+    const s = progress[q.id];
+    return !s || !s.next_review || s.next_review <= today;
+  }).length;
+  const masteredDueCount = filtered.filter(q => {
+    const s = progress[q.id] || {};
+    return (s.consecutive_correct || 0) >= MASTERY_THRESHOLD && (s.next_review || today) <= today;
+  }).length;
+  badge.textContent = `今日待複習：${dueCount} 題${masteredDueCount > 0 ? `（含 ${masteredDueCount} 已熟練）` : ''}`;
+}
+
+function buildReviewQueue(preservePosition) {
+  const today = todayStr();
+  const allTopics = [...new Set(questions.map(q => q.topic))];
+
+  // Read topics from DOM if available
+  const topicCbs = [...document.querySelectorAll('.topic-cb')];
+  if (topicCbs.length > 0) {
+    const selected = topicCbs.filter(cb => cb.checked).map(cb => cb.value);
+    reviewFilters.topics = selected.length === allTopics.length ? [] : selected;
+  }
+  // Close panel
+  const panel = document.getElementById('topic-dropdown-panel');
+  if (panel) panel.classList.add('hidden');
+
+  let pool = questions.filter(q => {
+    const s = progress[q.id];
+    if (!s || (s.wrong_count || 0) === 0) return false;
+    if (reviewFilters.topics.length > 0 && !reviewFilters.topics.includes(q.topic)) return false;
+    return true;
+  });
+
+  if (reviewFilters.order === 'srs') {
+    pool.sort((a, b) => {
+      const sa = progress[a.id] || {};
+      const sb = progress[b.id] || {};
+      const aMastered = (sa.consecutive_correct || 0) >= MASTERY_THRESHOLD ? 1 : 0;
+      const bMastered = (sb.consecutive_correct || 0) >= MASTERY_THRESHOLD ? 1 : 0;
+      const aDue = (sa.next_review || today) <= today ? 0 : 1;
+      const bDue = (sb.next_review || today) <= today ? 0 : 1;
+      const aTier = aDue * 2 + aMastered;
+      const bTier = bDue * 2 + bMastered;
+      if (aTier !== bTier) return aTier - bTier;
+      return (sa.next_review || '').localeCompare(sb.next_review || '');
+    });
+  } else {
+    pool = shuffle(pool);
+  }
+
+  reviewQueue = pool;
+  if (!preservePosition || reviewIndex >= reviewQueue.length) {
+    reviewIndex = 0;
+    reviewAnswered = false;
+    reviewUserAnswer = null;
+  }
+
+  updateReviewDueBadge();
   renderReviewCard();
+}
+
+function initReviewQueue() {
+  buildReviewQueue(false);
 }
 
 function renderReviewCard() {
@@ -456,7 +760,7 @@ function renderReviewCard() {
     return;
   }
   if (reviewIndex >= reviewQueue.length) {
-    card.innerHTML = completionCard(reviewQueue.length, 'navigate(\'review\')', '複習完成');
+    card.innerHTML = completionCard(reviewQueue.length, 'initReviewQueue()', '複習完成');
     return;
   }
 
@@ -490,6 +794,9 @@ function renderQuestionCard(q, num, total, answered, userAnswer, isReview) {
   const wrongBadge = (s.wrong_count || 0) > 0
     ? `<span class="text-xs bg-red-50 text-red-500 px-2 py-0.5 rounded-full">錯 ${s.wrong_count} 次</span>`
     : '';
+  const masteryBadge = isReview && (s.consecutive_correct || 0) >= MASTERY_THRESHOLD
+    ? `<span class="text-xs bg-green-50 text-green-600 px-2 py-0.5 rounded-full">★ 已熟練</span>`
+    : '';
 
   const answerFn = isReview ? 'answerReview' : 'answerPractice';
   const nextFn = isReview ? 'nextReviewQuestion' : 'nextPracticeQuestion';
@@ -500,13 +807,13 @@ function renderQuestionCard(q, num, total, answered, userAnswer, isReview) {
     if (q.type === 'tf') {
       optionsHTML = `
         <div class="grid grid-cols-2 gap-3 mt-5">
-          <button onclick="${answerFn}('O')"
-            class="option-btn py-3.5 border-2 border-gray-200 rounded-xl text-sm font-medium text-gray-700 hover:border-green-400 hover:bg-green-50 hover:text-green-700">
-            ○ 正確
-          </button>
           <button onclick="${answerFn}('X')"
             class="option-btn py-3.5 border-2 border-gray-200 rounded-xl text-sm font-medium text-gray-700 hover:border-red-400 hover:bg-red-50 hover:text-red-700">
             ✗ 錯誤
+          </button>
+          <button onclick="${answerFn}('O')"
+            class="option-btn py-3.5 border-2 border-gray-200 rounded-xl text-sm font-medium text-gray-700 hover:border-green-400 hover:bg-green-50 hover:text-green-700">
+            ○ 正確
           </button>
         </div>`;
     } else {
@@ -588,6 +895,7 @@ function renderQuestionCard(q, num, total, answered, userAnswer, isReview) {
           <span class="text-xs text-gray-400 bg-gray-50 px-2 py-0.5 rounded-full">${typeLabel}</span>
           <span class="text-xs text-gray-400 truncate max-w-[160px]">${escapeHtml(q.topic)}</span>
           ${wrongBadge}
+          ${masteryBadge}
         </div>
         <span class="text-xs text-gray-400 shrink-0">${num} / ${total}</span>
       </div>
@@ -702,7 +1010,11 @@ function init() {
   }
 
   questions = window.QUESTIONS;
+  loadMasteryThreshold();
   loadProgress();
+
+  const masteryInput = document.getElementById('mastery-threshold-input');
+  if (masteryInput) masteryInput.value = MASTERY_THRESHOLD;
 
   const savedSize = parseInt(localStorage.getItem('ppa_font_size') ?? '1', 10);
   applyFontSize(isNaN(savedSize) ? 1 : savedSize);

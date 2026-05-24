@@ -104,6 +104,12 @@
           <span class="sidebar-icon">🔁</span><span class="sidebar-label">錯題複習</span>
         </button>
       </li>
+      <li>
+        <button onclick="navigate('author')" id="nav-author" title="關於作者"
+          class="nav-btn w-full flex items-center gap-2 px-3 py-2.5 rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-100">
+          <span class="sidebar-icon">👤</span><span class="sidebar-label">關於作者</span>
+        </button>
+      </li>
     </ul>
     <div class="sidebar-bottom px-4 pb-4 space-y-2">
       <div class="text-xs text-gray-400" id="sidebar-total"></div>
@@ -117,6 +123,13 @@
           class="w-7 h-7 rounded-lg border text-base font-medium leading-none transition-colors">A</button>
         <button onclick="setFontSize(3)" id="font-btn-3"
           class="w-7 h-7 rounded-lg border text-lg font-medium leading-none transition-colors">A</button>
+      </div>
+      <div class="flex items-center gap-1.5">
+        <span class="text-xs text-gray-400">熟練門檻</span>
+        <input type="number" id="mastery-threshold-input" min="2" max="10" value="3"
+          onchange="saveMasteryThreshold(this.value)"
+          class="w-12 px-1 py-0.5 border border-gray-200 rounded-lg text-xs text-center focus:outline-none focus:ring-1 focus:ring-blue-200">
+        <span class="text-xs text-gray-400">連正</span>
       </div>
     </div>
   </nav>
