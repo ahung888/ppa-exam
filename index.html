@@ -189,7 +189,45 @@
   <script src="app.js"></script>
   <script>
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('./sw.js');
+      function showUpdateToast(worker) {
+        if (document.getElementById('sw-update-toast')) return;
+
+        if (!document.getElementById('sw-toast-style')) {
+          const s = document.createElement('style');
+          s.id = 'sw-toast-style';
+          s.textContent = '@keyframes sw-slide-up{from{opacity:0;transform:translateX(-50%) translateY(1rem)}to{opacity:1;transform:translateX(-50%) translateY(0)}}';
+          document.head.appendChild(s);
+        }
+
+        const toast = document.createElement('div');
+        toast.id = 'sw-update-toast';
+        toast.style.cssText = 'position:fixed;bottom:1.5rem;left:50%;transform:translateX(-50%);z-index:9999;display:flex;align-items:center;gap:0.6rem;background:#1d4ed8;color:#fff;padding:0.75rem 1.25rem;border-radius:0.75rem;box-shadow:0 4px 24px rgba(0,0,0,0.2);font-size:0.875rem;cursor:pointer;white-space:nowrap;animation:sw-slide-up 0.3s ease';
+        toast.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" style="width:1rem;height:1rem;flex-shrink:0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg><span>有新版本，點此更新</span>';
+        toast.addEventListener('click', () => {
+          worker.postMessage({ type: 'SKIP_WAITING' });
+          toast.remove();
+        });
+        document.body.appendChild(toast);
+      }
+
+      navigator.serviceWorker.register('./sw.js').then(reg => {
+        if (reg.waiting) showUpdateToast(reg.waiting);
+        reg.addEventListener('updatefound', () => {
+          const newWorker = reg.installing;
+          newWorker.addEventListener('statechange', () => {
+            if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+              showUpdateToast(newWorker);
+            }
+          });
+        });
+      });
+
+      let refreshing = false;
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (refreshing) return;
+        refreshing = true;
+        window.location.reload();
+      });
     }
   </script>
 </body>

@@ -1,5 +1,6 @@
-const CACHE = 'ppa-v1';
+const CACHE = 'ppa-v2';
 const CDN_CACHE = 'ppa-cdn-v1';
+const NETWORK_TIMEOUT_MS = 3000;
 
 const LOCAL_FILES = [
   './',
@@ -27,13 +28,17 @@ self.addEventListener('activate', e => {
   );
 });
 
+self.addEventListener('message', e => {
+  if (e.data && e.data.type === 'SKIP_WAITING') self.skipWaiting();
+});
+
 self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
 
   // GA 請求略過，離線時靜默失敗
   if (url.hostname.includes('googletagmanager') || url.hostname.includes('google-analytics')) return;
 
-  // CDN 資源：首次 fetch 後快取，之後 Cache First
+  // CDN 資源：Cache First，首次 fetch 後快取
   if (url.hostname !== self.location.hostname) {
     e.respondWith(
       caches.open(CDN_CACHE).then(cache =>
@@ -46,6 +51,16 @@ self.addEventListener('fetch', e => {
     return;
   }
 
-  // 本地檔案：Cache First
-  e.respondWith(caches.match(e.request).then(hit => hit || fetch(e.request)));
+  // 本地檔案：Network First（有網路時取最新版，超時或離線 fallback 快取）
+  e.respondWith(
+    Promise.race([
+      fetch(e.request).then(res => {
+        if (res.ok) caches.open(CACHE).then(c => c.put(e.request, res.clone()));
+        return res;
+      }),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('network timeout')), NETWORK_TIMEOUT_MS)
+      ),
+    ]).catch(() => caches.match(e.request))
+  );
 });
