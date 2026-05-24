@@ -143,7 +143,7 @@ function updateQuestionStats(id, isCorrect) {
 // EXAM DATE
 // =====================================================================
 function getExamDate() {
-  return localStorage.getItem('ppa_exam_date') || '2026-01-01';
+  return localStorage.getItem('ppa_exam_date') || new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Taipei' });
 }
 
 function getDaysLeft() {
