@@ -226,7 +226,7 @@ function navigate(view) {
     chartInstance = null;
   }
 
-  ['dashboard', 'practice', 'review', 'author'].forEach(v => {
+  ['dashboard', 'practice', 'review', 'reading', 'category', 'author'].forEach(v => {
     const btn = document.getElementById(`nav-${v}`);
     if (!btn) return;
     btn.classList.toggle('bg-blue-50', v === view);
@@ -239,7 +239,238 @@ function navigate(view) {
   if (view === 'dashboard') renderDashboard(content);
   else if (view === 'practice') renderPractice(content);
   else if (view === 'review') renderReview(content);
+  else if (view === 'reading') renderReading(content);
+  else if (view === 'category') renderCategory(content);
   else if (view === 'author') renderAuthor(content);
+
+  updateBackToTopVisibility();
+}
+
+// =====================================================================
+// BACK TO TOP
+// =====================================================================
+function scrollToTop() {
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+  const content = document.getElementById('app-content');
+  if (content) content.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function updateBackToTopVisibility() {
+  const btn = document.getElementById('back-to-top');
+  const content = document.getElementById('app-content');
+  if (!btn || !content) return;
+  const scrollable = document.documentElement.scrollHeight > document.documentElement.clientHeight
+    || content.scrollHeight > content.clientHeight;
+  btn.classList.toggle('hidden', !scrollable);
+}
+
+function setupBackToTopWatcher() {
+  const content = document.getElementById('app-content');
+  window.addEventListener('scroll', updateBackToTopVisibility);
+  window.addEventListener('resize', updateBackToTopVisibility);
+  if (content) {
+    content.addEventListener('scroll', updateBackToTopVisibility);
+    new MutationObserver(updateBackToTopVisibility)
+      .observe(content, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
+  }
+  updateBackToTopVisibility();
+}
+
+// =====================================================================
+// READING MODE (全題目列表 + 搜尋)
+// =====================================================================
+function renderReading(container) {
+  container.innerHTML = `
+    <div class="max-w-2xl mx-auto space-y-4 py-2">
+      <h2 class="text-xl font-bold text-gray-800 px-1">題目搜尋</h2>
+      <input type="text" id="reading-search" oninput="onReadingSearch()" placeholder="搜尋題目關鍵字..."
+        class="w-full px-3 py-2 border border-gray-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-200">
+      <div id="reading-count" class="text-xs text-gray-400 px-1"></div>
+      <div id="reading-list" class="space-y-4"></div>
+    </div>
+  `;
+  renderReadingList(questions);
+}
+
+function onReadingSearch() {
+  const term = document.getElementById('reading-search').value.trim();
+  const filtered = term ? questions.filter(q => q.question.includes(term)) : questions;
+  renderReadingList(filtered, term);
+}
+
+function renderReadingList(list, term = '') {
+  document.getElementById('reading-count').textContent = `共 ${questions.length} 題（顯示 ${list.length} 題）`;
+  const listEl = document.getElementById('reading-list');
+  listEl.innerHTML = list.length === 0
+    ? emptyCard('找不到符合的題目')
+    : list.map(q => renderReadingCard(q, questions.indexOf(q) + 1, term)).join('');
+}
+
+function renderReadingCard(q, num, term) {
+  const typeLabel = q.type === 'tf' ? '是非題' : '選擇題';
+
+  return `
+    <div class="relative bg-white rounded-2xl shadow-sm border border-gray-100 px-5 py-4 cursor-pointer hover:shadow-md transition-shadow"
+      onclick="copyReadingCard(event, '${q.id}')" title="點擊複製「題號,答案,題目」到剪貼簿">
+      <div class="flex items-center justify-between mb-2">
+        <div class="flex items-center gap-2">
+          <span class="text-xs text-gray-400 bg-gray-50 px-2 py-0.5 rounded-full">${typeLabel}</span>
+          <span class="text-xs text-gray-400 truncate max-w-[160px]">${escapeHtml(q.topic)}</span>
+        </div>
+        <span class="text-xs text-gray-400 shrink-0">#${num}</span>
+      </div>
+      <p class="text-gray-800 text-sm leading-relaxed">${highlightMatch(q.question, term)}</p>
+      ${renderQuestionDetail(q)}
+    </div>`;
+}
+
+// 題目「選項 + 答案 + 法條」區塊，供題目搜尋卡片與題目總覽展開內容共用
+function renderQuestionDetail(q) {
+  const optionsHTML = (q.type === 'mc' && q.options) ? `
+    <div class="space-y-1.5 mt-3">
+      ${q.options.map((opt, i) => `
+        <div class="text-sm text-gray-600"><span class="font-semibold mr-1.5 text-gray-400">(${i + 1})</span>${escapeHtml(opt)}</div>`).join('')}
+    </div>` : '';
+
+  const answerText = q.type === 'tf' ? (q.answer === 'O' ? '○ 正確' : '✗ 錯誤') : `(${q.answer})`;
+  const lawHTML = q.law_ref ? ` ｜ 依據：${escapeHtml(q.law_ref)}` : '';
+
+  return `
+    ${optionsHTML}
+    <div class="mt-3 pt-3 border-t border-gray-100 text-sm text-gray-600">
+      答案：<span class="font-semibold text-blue-600">${answerText}</span>${lawHTML}
+    </div>`;
+}
+
+// 在 text 已 escape 的前提下，把符合 term 的片段用 <mark> 包起來
+function highlightMatch(text, term) {
+  const escaped = escapeHtml(text);
+  if (!term) return escaped;
+  const escapedTerm = escapeHtml(term);
+  if (!escapedTerm) return escaped;
+  return escaped.split(escapedTerm).join(`<mark class="bg-yellow-200 rounded-sm px-0.5">${escapedTerm}</mark>`);
+}
+
+// 把欄位值轉成 CSV 安全格式（含逗號/雙引號/換行時用雙引號包住並轉義內部雙引號）
+function csvField(v) {
+  const s = String(v);
+  return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+
+function copyReadingCard(event, id) {
+  const idx = questions.findIndex(x => x.id === id);
+  if (idx === -1) return;
+  const q = questions[idx];
+  let questionField = q.question;
+  if (q.type === 'mc' && q.options && q.options.length) {
+    questionField += ' ' + q.options.map((opt, i) => `(${i + 1})${opt}`).join(' ');
+  }
+  const text = [idx + 1, q.answer, questionField].map(csvField).join(',');
+  copyTextWithCardFeedback(text, event.currentTarget);
+}
+
+function copyTextWithCardFeedback(text, cardEl) {
+  const showBadge = () => {
+    const badge = document.createElement('span');
+    badge.textContent = '✓ 已複製';
+    badge.className = 'absolute top-3 right-3 text-xs bg-green-600 text-white px-2 py-0.5 rounded-full shadow';
+    cardEl.appendChild(badge);
+    setTimeout(() => badge.remove(), 1200);
+  };
+
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(showBadge).catch(() => {});
+  } else {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); showBadge(); } catch {}
+    document.body.removeChild(ta);
+  }
+}
+
+// =====================================================================
+// CATEGORY BROWSER (分類下拉選單 → 題目單行列 → 點擊展開完整內容)
+// =====================================================================
+let categoryTopics = [];
+let categoryActiveIndex = -1; // -1 = 全部
+let categoryAllExpanded = false;
+
+function renderCategory(container) {
+  categoryTopics = [...new Set(questions.map(q => q.topic))].sort();
+  if (categoryActiveIndex >= categoryTopics.length) categoryActiveIndex = -1;
+
+  container.innerHTML = `
+    <div class="max-w-2xl mx-auto space-y-4 py-2">
+      <h2 class="text-xl font-bold text-gray-800 px-1">題目總覽</h2>
+      <div class="flex items-center gap-2">
+        <select id="category-select" onchange="onCategorySelectChange()"
+          class="flex-1 min-w-0 px-3 py-2 border border-gray-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-200">
+          <option value="-1">全部（${questions.length}）</option>
+          ${categoryTopics.map((t, ti) => `
+            <option value="${ti}">${escapeHtml(t)}（${questions.filter(q => q.topic === t).length}）</option>`).join('')}
+        </select>
+        <button id="category-toggle-all" onclick="toggleAllCategoryRows()"
+          class="shrink-0 px-3 py-2 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-100 whitespace-nowrap">
+          全部展開
+        </button>
+      </div>
+      <div id="category-list" class="space-y-2"></div>
+    </div>
+  `;
+
+  document.getElementById('category-select').value = categoryActiveIndex;
+  renderCategoryQuestionList();
+}
+
+function onCategorySelectChange() {
+  categoryActiveIndex = Number(document.getElementById('category-select').value);
+  renderCategoryQuestionList();
+}
+
+function renderCategoryQuestionList() {
+  const list = categoryActiveIndex === -1
+    ? questions
+    : questions.filter(q => q.topic === categoryTopics[categoryActiveIndex]);
+
+  document.getElementById('category-list').innerHTML =
+    list.map(q => renderCategoryRow(q, questions.indexOf(q) + 1)).join('');
+  applyCategoryExpandState();
+}
+
+function toggleAllCategoryRows() {
+  categoryAllExpanded = !categoryAllExpanded;
+  applyCategoryExpandState();
+}
+
+function applyCategoryExpandState() {
+  document.querySelectorAll('#category-list [id^="cat-row-"]').forEach(el => {
+    el.classList.toggle('hidden', !categoryAllExpanded);
+  });
+  const btn = document.getElementById('category-toggle-all');
+  if (btn) btn.textContent = categoryAllExpanded ? '全部合上' : '全部展開';
+}
+
+function renderCategoryRow(q, num) {
+  return `
+    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+      <button onclick="toggleCategoryRow(${num})"
+        class="w-full flex items-center gap-2 px-5 py-2.5 text-left hover:bg-gray-50">
+        <span class="text-xs text-gray-400 shrink-0">#${num}</span>
+        <span class="text-sm text-gray-700 truncate">${escapeHtml(q.question)}</span>
+      </button>
+      <div id="cat-row-${num}" class="hidden px-5 pb-4 pt-3 border-t border-gray-100">
+        <p class="text-gray-800 text-sm leading-relaxed mb-1">${escapeHtml(q.question)}</p>
+        ${renderQuestionDetail(q)}
+      </div>
+    </div>`;
+}
+
+function toggleCategoryRow(num) {
+  document.getElementById(`cat-row-${num}`).classList.toggle('hidden');
 }
 
 // =====================================================================
@@ -1030,6 +1261,7 @@ function init() {
     document.getElementById('desktop-sidebar-toggle').title = '展開側欄';
   }
 
+  setupBackToTopWatcher();
   navigate('dashboard');
 }
 

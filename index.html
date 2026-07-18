@@ -93,6 +93,18 @@
         </button>
       </li>
       <li>
+        <button onclick="navigate('category')" id="nav-category" title="題目總覽"
+          class="nav-btn w-full flex items-center gap-2 px-3 py-2.5 rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-100">
+          <span class="sidebar-icon">🗂️</span><span class="sidebar-label">題目總覽</span>
+        </button>
+      </li>
+      <li>
+        <button onclick="navigate('reading')" id="nav-reading" title="題目搜尋"
+          class="nav-btn w-full flex items-center gap-2 px-3 py-2.5 rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-100">
+          <span class="sidebar-icon">📖</span><span class="sidebar-label">題目搜尋</span>
+        </button>
+      </li>
+      <li>
         <button onclick="navigate('practice')" id="nav-practice" title="單元刷題"
           class="nav-btn w-full flex items-center gap-2 px-3 py-2.5 rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-100">
           <span class="sidebar-icon">📝</span><span class="sidebar-label">單元刷題</span>
@@ -137,6 +149,14 @@
   <!-- Main content -->
   <main id="app-content" class="p-4 md:p-6 md:flex-1 md:overflow-y-auto">
   </main>
+
+  <!-- Back to top -->
+  <button id="back-to-top" onclick="scrollToTop()" title="回到頂部"
+    class="hidden fixed bottom-5 right-5 z-20 w-11 h-11 flex items-center justify-center rounded-full bg-blue-600 text-white shadow-lg hover:bg-blue-700">
+    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7"/>
+    </svg>
+  </button>
 
   <!-- AI Modal -->
   <div id="ai-modal" class="hidden fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50 p-4">
