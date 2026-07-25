@@ -3,19 +3,21 @@
 // =====================================================================
 let questions = [];
 let progress = {};
-let chartInstance = null;
-
-let practiceQueue = [];
-let practiceIndex = 0;
-let practiceAnswered = false;
-let practiceUserAnswer = null;
-let practiceFilters = { topic: 'all', type: 'all', order: 'random' };
+let attemptLog = []; // [{ date: 'YYYY-MM-DD', correct: bool }, ...]
+let examHistory = []; // [{ date: 'YYYY-MM-DD', correct: number, total: number }, ...]
 
 let reviewQueue = [];
 let reviewIndex = 0;
 let reviewAnswered = false;
 let reviewUserAnswer = null;
 let reviewFilters = { topics: [], order: 'srs' };
+
+let quizConfig = { topics: [], count: 20, type: 'mixed', mode: 'practice' }; // mode: 'practice' | 'exam'
+let quizQueue = [];
+let quizIndex = 0;
+let quizAnswers = []; // parallel to quizQueue: { answered: bool, userAnswer: string|null }
+let quizResults = null;
+let quizDetailFilter = 'wrong'; // 'wrong' | 'all'
 
 let currentAIQuestion = null;
 let _topicDropdownHandler = null;
@@ -50,6 +52,30 @@ function escapeHtml(str) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+function accColor(pct) {
+  return pct >= 80 ? { text: 'text-green-600', bar: 'bg-green-400' }
+       : pct >= 60 ? { text: 'text-yellow-500', bar: 'bg-yellow-400' }
+       : { text: 'text-red-500', bar: 'bg-red-400' };
+}
+
+const RECENT_WINDOW_DAYS = 7;
+
+function computeRecentAccuracy() {
+  const cutoff = addDays(todayStr(), -(RECENT_WINDOW_DAYS - 1));
+  const recent = attemptLog.filter(a => a.date >= cutoff);
+  const correct = recent.filter(a => a.correct).length;
+  const total = recent.length;
+  return { correct, total, pct: total > 0 ? Math.round(correct / total * 100) : null };
+}
+
+function computeRecentExamAvg() {
+  const cutoff = addDays(todayStr(), -(RECENT_WINDOW_DAYS - 1));
+  const recent = examHistory.filter(e => e.date >= cutoff);
+  const correct = recent.reduce((s, e) => s + e.correct, 0);
+  const total = recent.reduce((s, e) => s + e.total, 0);
+  return { sessionCount: recent.length, correct, total, pct: total > 0 ? Math.round(correct / total * 100) : null };
 }
 
 // =====================================================================
@@ -99,6 +125,17 @@ function loadProgress() {
     progress = {};
   }
   migrateProgress();
+
+  try {
+    attemptLog = JSON.parse(localStorage.getItem('ppa_attempt_log') || '[]');
+  } catch {
+    attemptLog = [];
+  }
+  try {
+    examHistory = JSON.parse(localStorage.getItem('ppa_exam_history') || '[]');
+  } catch {
+    examHistory = [];
+  }
 }
 
 function migrateProgress() {
@@ -118,7 +155,25 @@ function saveProgress() {
   localStorage.setItem('ppa_progress', JSON.stringify(progress));
 }
 
+function saveAttemptLog() {
+  const cutoff = addDays(todayStr(), -30); // 只保留近30天，控制儲存量
+  attemptLog = attemptLog.filter(a => a.date >= cutoff);
+  localStorage.setItem('ppa_attempt_log', JSON.stringify(attemptLog));
+}
+
+function logAttempt(isCorrect) {
+  attemptLog.push({ date: todayStr(), correct: isCorrect });
+  saveAttemptLog();
+}
+
+function saveExamHistory() {
+  const cutoff = addDays(todayStr(), -30);
+  examHistory = examHistory.filter(e => e.date >= cutoff);
+  localStorage.setItem('ppa_exam_history', JSON.stringify(examHistory));
+}
+
 function updateQuestionStats(id, isCorrect) {
+  logAttempt(isCorrect);
   const today = todayStr();
   const stat = progress[id] || { wrong_count: 0, correct_count: 0, interval_days: 1, consecutive_correct: 0 };
   if (isCorrect) {
@@ -221,12 +276,7 @@ function navigate(view) {
     gtag('event', 'section_view', { section: view });
   }
 
-  if (chartInstance && view !== 'dashboard') {
-    chartInstance.destroy();
-    chartInstance = null;
-  }
-
-  ['dashboard', 'practice', 'review', 'reading', 'category', 'author'].forEach(v => {
+  ['dashboard', 'quiz', 'review', 'reading', 'category', 'author'].forEach(v => {
     const btn = document.getElementById(`nav-${v}`);
     if (!btn) return;
     btn.classList.toggle('bg-blue-50', v === view);
@@ -237,7 +287,7 @@ function navigate(view) {
 
   const content = document.getElementById('app-content');
   if (view === 'dashboard') renderDashboard(content);
-  else if (view === 'practice') renderPractice(content);
+  else if (view === 'quiz') renderQuizSetup(content);
   else if (view === 'review') renderReview(content);
   else if (view === 'reading') renderReading(content);
   else if (view === 'category') renderCategory(content);
@@ -508,24 +558,36 @@ function renderAuthor(container) {
 // =====================================================================
 // DASHBOARD
 // =====================================================================
+function renderStatCard(label, pct, subtext, colorMode) {
+  if (pct === null) {
+    return `
+      <div class="bg-white rounded-2xl p-4 md:p-6 shadow-sm border border-gray-100">
+        <div class="text-xs text-gray-400 mb-1 uppercase tracking-wide">${label}</div>
+        <div class="text-2xl md:text-4xl font-bold text-gray-300">－</div>
+        <div class="text-xs text-gray-400 mt-1.5">${subtext}</div>
+        <div class="mt-2 h-1.5 bg-gray-100 rounded-full"></div>
+      </div>`;
+  }
+  const col = colorMode === 'neutral' ? { text: 'text-blue-600', bar: 'bg-blue-400' } : accColor(pct);
+  return `
+    <div class="bg-white rounded-2xl p-4 md:p-6 shadow-sm border border-gray-100">
+      <div class="text-xs text-gray-400 mb-1 uppercase tracking-wide">${label}</div>
+      <div class="text-2xl md:text-4xl font-bold ${col.text}">${pct}<span class="text-lg md:text-2xl">%</span></div>
+      <div class="text-xs text-gray-400 mt-1.5">${subtext}</div>
+      <div class="mt-2 h-1.5 bg-gray-100 rounded-full"><div class="h-1.5 ${col.bar} rounded-full" style="width:${pct}%"></div></div>
+    </div>`;
+}
+
 function renderDashboard(container) {
   const total = questions.length;
   const seenIds = Object.keys(progress).filter(id => progress[id].last_seen);
   const seen = seenIds.length;
-
-  let totalCorrect = 0, totalAttempts = 0;
-  for (const id in progress) {
-    const s = progress[id];
-    totalCorrect += s.correct_count || 0;
-    totalAttempts += (s.correct_count || 0) + (s.wrong_count || 0);
-  }
-
   const coverage = total > 0 ? Math.round(seen / total * 100) : 0;
-  const accuracy = totalAttempts > 0 ? Math.round(totalCorrect / totalAttempts * 100) : 0;
+
+  const recentAcc = computeRecentAccuracy();
+  const recentExam = computeRecentExamAvg();
 
   const daysLeft = getDaysLeft();
-
-  const accColor = accuracy >= 80 ? 'text-green-600' : accuracy >= 60 ? 'text-yellow-500' : 'text-red-500';
 
   container.innerHTML = `
     <div class="max-w-3xl mx-auto">
@@ -533,253 +595,558 @@ function renderDashboard(container) {
         <h2 class="text-xl font-bold text-gray-800">數據看板</h2>
         <span class="text-sm text-gray-500">距考試還有 <strong class="text-red-500">${daysLeft}</strong> 天</span>
       </div>
-      <div class="grid grid-cols-2 gap-3 md:gap-4 mb-5 md:mb-6">
-        <div class="bg-white rounded-2xl p-4 md:p-6 shadow-sm border border-gray-100">
-          <div class="text-xs text-gray-400 mb-1 uppercase tracking-wide">全題庫覆蓋率</div>
-          <div class="text-3xl md:text-5xl font-bold text-blue-600">${coverage}<span class="text-lg md:text-2xl">%</span></div>
-          <div class="text-xs text-gray-400 mt-1.5">${seen} / ${total} 題</div>
-          <div class="mt-2 h-1.5 bg-gray-100 rounded-full"><div class="h-1.5 bg-blue-400 rounded-full" style="width:${coverage}%"></div></div>
-        </div>
-        <div class="bg-white rounded-2xl p-4 md:p-6 shadow-sm border border-gray-100">
-          <div class="text-xs text-gray-400 mb-1 uppercase tracking-wide">整體正確率</div>
-          <div class="text-3xl md:text-5xl font-bold ${accColor}">${accuracy}<span class="text-lg md:text-2xl">%</span></div>
-          <div class="text-xs text-gray-400 mt-1.5">${totalCorrect} / ${totalAttempts} 次</div>
-          <div class="mt-2 h-1.5 bg-gray-100 rounded-full"><div class="h-1.5 ${accuracy >= 80 ? 'bg-green-400' : accuracy >= 60 ? 'bg-yellow-400' : 'bg-red-400'} rounded-full" style="width:${accuracy}%"></div></div>
-        </div>
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 md:gap-4 mb-5 md:mb-6">
+        ${renderStatCard('全題庫覆蓋率', coverage, `${seen} / ${total} 題`, 'neutral')}
+        ${renderStatCard('近7日正確率', recentAcc.pct,
+          recentAcc.total > 0 ? `${recentAcc.correct} / ${recentAcc.total} 次` : '近7日尚無作答紀錄', 'graded')}
+        ${renderStatCard('近7日模擬測驗平均分', recentExam.pct,
+          recentExam.sessionCount > 0 ? `共 ${recentExam.sessionCount} 場` : '近7日尚無測驗紀錄', 'graded')}
       </div>
       <div class="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
-        <h3 class="text-sm font-semibold text-gray-700 mb-4">各章節正確率</h3>
-        <div style="height:340px"><canvas id="topic-chart"></canvas></div>
+        <h3 class="text-sm font-semibold text-gray-700 mb-2">各章節覆蓋率</h3>
+        <div id="topic-coverage-list" class="divide-y divide-gray-50"></div>
       </div>
     </div>
   `;
 
-  renderTopicChart();
+  renderTopicCoverage();
 }
 
-function renderTopicChart() {
+function renderTopicCoverage() {
   const topicMap = {};
   for (const q of questions) {
-    if (!topicMap[q.topic]) topicMap[q.topic] = { correct: 0, total: 0 };
+    if (!topicMap[q.topic]) topicMap[q.topic] = { seen: 0, total: 0 };
+    topicMap[q.topic].total++;
   }
   for (const id in progress) {
-    const s = progress[id];
+    if (!progress[id].last_seen) continue;
     const q = questions.find(x => x.id === id);
     if (!q || !topicMap[q.topic]) continue;
-    topicMap[q.topic].correct += s.correct_count || 0;
-    topicMap[q.topic].total += (s.correct_count || 0) + (s.wrong_count || 0);
+    topicMap[q.topic].seen++;
   }
 
   const topics = Object.keys(topicMap);
-  const shortLabels = topics.map(t => t.length > 14 ? t.slice(0, 14) + '…' : t);
-  const data = topics.map(t => {
+  const rows = topics.map(t => {
     const s = topicMap[t];
-    return s.total > 0 ? Math.round(s.correct / s.total * 100) : 0;
-  });
+    const pct = s.total > 0 ? Math.round(s.seen / s.total * 100) : 0;
+    const col = accColor(pct);
+    return `
+      <div class="py-2.5">
+        <div class="flex items-center justify-between mb-1">
+          <span class="text-sm text-gray-700 truncate pr-3">${escapeHtml(t)}</span>
+          <span class="text-xs text-gray-400 shrink-0">已答 ${s.seen} / 共 ${s.total} 題</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <div class="flex-1 h-1.5 bg-gray-100 rounded-full">
+            <div class="h-1.5 ${col.bar} rounded-full" style="width:${pct}%"></div>
+          </div>
+          <span class="text-xs font-semibold ${col.text} w-9 text-right">${pct}%</span>
+        </div>
+      </div>`;
+  }).join('');
 
-  if (chartInstance) chartInstance.destroy();
-  chartInstance = new Chart(document.getElementById('topic-chart'), {
-    type: 'bar',
-    data: {
-      labels: shortLabels,
-      datasets: [{
-        data,
-        backgroundColor: data.map(v => v >= 80 ? '#22c55e80' : v >= 60 ? '#eab30880' : '#ef444480'),
-        borderColor: data.map(v => v >= 80 ? '#22c55e' : v >= 60 ? '#eab308' : '#ef4444'),
-        borderWidth: 1.5,
-        borderRadius: 4,
-      }]
-    },
-    options: {
-      indexAxis: 'y',
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: { display: false },
-        tooltip: {
-          callbacks: {
-            title: items => topics[items[0].dataIndex],
-            label: item => `正確率: ${item.raw}%`
-          }
-        }
-      },
-      scales: {
-        x: { min: 0, max: 100, ticks: { callback: v => v + '%', font: { size: 11 } }, grid: { color: '#f3f4f6' } },
-        y: { ticks: { font: { size: 11 } } }
-      }
-    }
-  });
+  document.getElementById('topic-coverage-list').innerHTML = rows;
 }
 
 // =====================================================================
-// PRACTICE MODE
+// QUIZ PRACTICE (刷題練習)
 // =====================================================================
-function renderPractice(container) {
+function renderQuizSetup(container) {
   const topics = [...new Set(questions.map(q => q.topic))].sort();
+  const selectedTopics = quizConfig.topics.length ? quizConfig.topics : topics;
 
   container.innerHTML = `
     <div class="max-w-2xl mx-auto">
-      <h2 class="text-xl font-bold text-gray-800 mb-4">單元刷題</h2>
-      <div class="flex items-center gap-2 mb-5 flex-wrap">
-        <select id="filter-topic" onchange="onPracticeFilterChange()"
-          class="flex-1 min-w-[80px] px-3 py-2 border border-gray-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-200">
-          <option value="all">全部章節</option>
-          ${topics.map(t => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('')}
-        </select>
-        <select id="filter-type" onchange="onPracticeFilterChange()"
-          class="px-3 py-2 border border-gray-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-200">
-          <option value="all">全部題型</option>
-          <option value="tf">是非題</option>
-          <option value="mc">選擇題</option>
-        </select>
-        <div class="flex shrink-0">
-          <button id="pill-normal" onclick="setPracticeOrder('normal')"
-            class="px-3 py-2 border border-gray-200 rounded-l-xl text-sm leading-none">正常</button>
-          <button id="pill-unanswered" onclick="setPracticeOrder('unanswered')"
-            class="px-3 py-2 border-t border-b border-r border-gray-200 text-sm leading-none">未答</button>
-          <button id="pill-random" onclick="setPracticeOrder('random')"
-            class="px-3 py-2 border-t border-b border-r border-gray-200 rounded-r-xl text-sm leading-none">隨機</button>
+      <h2 class="text-xl font-bold text-gray-800 mb-4">刷題練習</h2>
+      <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-5 space-y-6">
+        <div>
+          <div class="text-sm font-semibold text-gray-700 mb-2">作答模式</div>
+          <div class="flex gap-2">
+            <button id="quiz-mode-practice" onclick="setQuizMode('practice')"
+              class="flex-1 px-3 py-2.5 border-2 border-gray-200 rounded-xl text-sm font-medium text-gray-600">練習模式（每題即時對錯）</button>
+            <button id="quiz-mode-exam" onclick="setQuizMode('exam')"
+              class="flex-1 px-3 py-2.5 border-2 border-gray-200 rounded-xl text-sm font-medium text-gray-600">測驗模式（作答完才看結果）</button>
+          </div>
         </div>
-        <button onclick="initPracticeQueue()" title="重新出題"
-          class="shrink-0 w-9 h-9 flex items-center justify-center border border-gray-200 rounded-xl text-gray-500 hover:bg-gray-100">
-          <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-              d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
-          </svg>
+
+        <div>
+          <div class="flex items-center justify-between mb-2">
+            <div class="text-sm font-semibold text-gray-700">選擇章節</div>
+            <label class="flex items-center gap-1.5 text-xs text-gray-500 cursor-pointer select-none">
+              <input type="checkbox" id="quiz-topic-all-cb" onchange="onQuizTopicAllChange()">
+              全選 / 全不選
+            </label>
+          </div>
+          <div class="border border-gray-100 rounded-xl max-h-48 overflow-y-auto p-1">
+            ${topics.map(t => `
+              <label class="flex items-center gap-2 px-2.5 py-1.5 rounded-lg hover:bg-gray-50 cursor-pointer select-none">
+                <input type="checkbox" class="quiz-topic-cb" value="${escapeHtml(t)}" onchange="onQuizTopicCbChange()">
+                <span class="text-sm text-gray-700">${escapeHtml(t)}</span>
+              </label>`).join('')}
+          </div>
+          <div id="quiz-validation-msg" class="text-xs text-red-500 mt-1.5 hidden">請至少選擇一個章節</div>
+        </div>
+
+        <div>
+          <div class="flex items-center justify-between mb-2">
+            <div class="text-sm font-semibold text-gray-700">題目數量</div>
+            <span class="text-sm font-semibold text-blue-600"><span id="quiz-count-label">${quizConfig.count}</span> 題</span>
+          </div>
+          <input type="range" id="quiz-count-slider" min="5" max="50" step="5" value="${quizConfig.count}"
+            oninput="onQuizCountChange()" class="w-full accent-blue-600">
+          <div class="flex justify-between text-xs text-gray-400 mt-0.5"><span>5</span><span>50</span></div>
+        </div>
+
+        <div>
+          <div class="text-sm font-semibold text-gray-700 mb-2">題型</div>
+          <div class="flex gap-2">
+            <button id="quiz-type-tf" onclick="setQuizType('tf')"
+              class="flex-1 px-3 py-2 border-2 border-gray-200 rounded-xl text-sm font-medium text-gray-600">全是非題</button>
+            <button id="quiz-type-mc" onclick="setQuizType('mc')"
+              class="flex-1 px-3 py-2 border-2 border-gray-200 rounded-xl text-sm font-medium text-gray-600">全選擇題</button>
+            <button id="quiz-type-mixed" onclick="setQuizType('mixed')"
+              class="flex-1 px-3 py-2 border-2 border-gray-200 rounded-xl text-sm font-medium text-gray-600">混合</button>
+          </div>
+        </div>
+
+        <button id="quiz-start-btn" onclick="startQuiz()"
+          class="w-full py-3 bg-blue-600 text-white rounded-xl text-sm font-semibold hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed">
+          開始測驗 ▶
         </button>
       </div>
-      <div id="practice-card"></div>
     </div>
   `;
 
-  document.getElementById('filter-topic').value = practiceFilters.topic;
-  document.getElementById('filter-type').value = practiceFilters.type;
-  updatePracticePills();
-
-  if (practiceQueue.length === 0) {
-    initPracticeQueue();
-  } else {
-    renderPracticeCard();
-  }
+  document.querySelectorAll('.quiz-topic-cb').forEach(cb => {
+    cb.checked = selectedTopics.includes(cb.value);
+  });
+  updateQuizModePills();
+  updateQuizTypePills();
+  onQuizTopicCbChange();
 }
 
-function onPracticeFilterChange() {
-  practiceFilters.topic = document.getElementById('filter-topic').value;
-  practiceFilters.type  = document.getElementById('filter-type').value;
-  initPracticeQueue();
-}
-
-function setPracticeOrder(order) {
-  practiceFilters.order = order;
-  updatePracticePills();
-  initPracticeQueue();
-}
-
-function updatePracticePills() {
-  ['normal', 'unanswered', 'random'].forEach(o => {
-    const btn = document.getElementById(`pill-${o}`);
+function updateQuizModePills() {
+  ['practice', 'exam'].forEach(m => {
+    const btn = document.getElementById(`quiz-mode-${m}`);
     if (!btn) return;
-    const active = practiceFilters.order === o;
-    btn.classList.toggle('bg-blue-50',    active);
-    btn.classList.toggle('text-blue-700', active);
+    const active = quizConfig.mode === m;
     btn.classList.toggle('border-blue-500', active);
+    btn.classList.toggle('bg-blue-50', active);
+    btn.classList.toggle('text-blue-700', active);
+    btn.classList.toggle('border-gray-200', !active);
     btn.classList.toggle('text-gray-600', !active);
-    btn.classList.toggle('font-medium',   active);
   });
 }
 
-function initPracticeQueue() {
-  practiceFilters.topic = document.getElementById('filter-topic')?.value ?? practiceFilters.topic;
-  practiceFilters.type  = document.getElementById('filter-type')?.value  ?? practiceFilters.type;
+function updateQuizTypePills() {
+  ['tf', 'mc', 'mixed'].forEach(t => {
+    const btn = document.getElementById(`quiz-type-${t}`);
+    if (!btn) return;
+    const active = quizConfig.type === t;
+    btn.classList.toggle('border-blue-500', active);
+    btn.classList.toggle('bg-blue-50', active);
+    btn.classList.toggle('text-blue-700', active);
+    btn.classList.toggle('border-gray-200', !active);
+    btn.classList.toggle('text-gray-600', !active);
+  });
+}
 
-  let filtered = questions.filter(q => {
-    if (practiceFilters.topic !== 'all' && q.topic !== practiceFilters.topic) return false;
-    if (practiceFilters.type !== 'all' && q.type !== practiceFilters.type) return false;
+function setQuizMode(mode) {
+  quizConfig.mode = mode;
+  updateQuizModePills();
+}
+
+function setQuizType(type) {
+  quizConfig.type = type;
+  updateQuizTypePills();
+}
+
+function onQuizTopicAllChange() {
+  const allCb = document.getElementById('quiz-topic-all-cb');
+  document.querySelectorAll('.quiz-topic-cb').forEach(cb => { cb.checked = allCb.checked; });
+  allCb.indeterminate = false;
+  updateQuizStartButtonState();
+}
+
+function onQuizTopicCbChange() {
+  const cbs = [...document.querySelectorAll('.quiz-topic-cb')];
+  const n = cbs.filter(cb => cb.checked).length;
+  const allCb = document.getElementById('quiz-topic-all-cb');
+  if (allCb) {
+    allCb.checked = n === cbs.length;
+    allCb.indeterminate = n > 0 && n < cbs.length;
+  }
+  updateQuizStartButtonState();
+}
+
+function updateQuizStartButtonState() {
+  const n = document.querySelectorAll('.quiz-topic-cb:checked').length;
+  const btn = document.getElementById('quiz-start-btn');
+  const msg = document.getElementById('quiz-validation-msg');
+  if (!btn) return;
+  btn.disabled = n === 0;
+  if (msg) msg.classList.toggle('hidden', n !== 0);
+}
+
+function onQuizCountChange() {
+  const slider = document.getElementById('quiz-count-slider');
+  const label = document.getElementById('quiz-count-label');
+  if (slider && label) label.textContent = slider.value;
+}
+
+function startQuiz() {
+  const topicCbs = [...document.querySelectorAll('.quiz-topic-cb')];
+  quizConfig.topics = topicCbs.filter(cb => cb.checked).map(cb => cb.value);
+  const slider = document.getElementById('quiz-count-slider');
+  if (slider) quizConfig.count = parseInt(slider.value, 10);
+  beginQuizRound();
+}
+
+function beginQuizRound() {
+  if (quizConfig.topics.length === 0) return;
+
+  const content = document.getElementById('app-content');
+  const pool = questions.filter(q => {
+    if (!quizConfig.topics.includes(q.topic)) return false;
+    if (quizConfig.type !== 'mixed' && q.type !== quizConfig.type) return false;
     return true;
   });
 
-  if (practiceFilters.order === 'unanswered') {
-    filtered = filtered.filter(q => {
-      const s = progress[q.id];
-      return !s || ((s.correct_count || 0) + (s.wrong_count || 0)) === 0;
-    });
+  if (pool.length === 0) {
+    content.innerHTML = `
+      <div class="max-w-2xl mx-auto">
+        <h2 class="text-xl font-bold text-gray-800 mb-4">刷題練習</h2>
+        ${emptyCard('沒有符合條件的題目可供測驗', '請調整章節或題型後再試一次')}
+        <div class="mt-4 text-center">
+          <button onclick="navigate('quiz')"
+            class="px-6 py-2.5 bg-blue-600 text-white rounded-xl text-sm font-medium hover:bg-blue-700">回設定畫面</button>
+        </div>
+      </div>`;
+    return;
   }
 
-  practiceQueue = practiceFilters.order === 'random' ? shuffle(filtered) : [...filtered];
-  practiceIndex = 0;
-  practiceAnswered = false;
-  practiceUserAnswer = null;
-  renderPracticeCard();
+  quizQueue = shuffle(pool).slice(0, quizConfig.count);
+  quizAnswers = quizQueue.map(() => ({ answered: false, userAnswer: null }));
+  quizIndex = 0;
+  quizResults = null;
+
+  if (quizConfig.mode === 'practice') {
+    renderQuizTakingPractice(content);
+  } else {
+    renderQuizTakingExam(content);
+  }
 }
 
-function renderPracticeCard() {
-  const card = document.getElementById('practice-card');
+function renderQuizTakingPractice(container) {
+  container.innerHTML = `
+    <div class="max-w-2xl mx-auto">
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="text-xl font-bold text-gray-800">刷題練習</h2>
+        <span class="text-sm text-gray-500">本次測驗 ${quizQueue.length} 題</span>
+      </div>
+      <div id="quiz-card"></div>
+    </div>
+  `;
+  renderQuizPracticeCard();
+}
+
+function renderQuizPracticeCard() {
+  const card = document.getElementById('quiz-card');
   if (!card) return;
 
-  if (practiceQueue.length === 0) {
-    if (practiceFilters.order === 'unanswered') {
-      card.innerHTML = practiceUnansweredCompletionCard();
-    } else {
-      card.innerHTML = emptyCard('沒有符合條件的題目');
-    }
-    return;
-  }
-  if (practiceIndex >= practiceQueue.length) {
-    if (practiceFilters.order === 'unanswered') {
-      card.innerHTML = practiceUnansweredCompletionCard();
-    } else {
-      card.innerHTML = completionCard(practiceQueue.length, 'initPracticeQueue()');
-    }
+  if (quizIndex >= quizQueue.length) {
+    finishQuiz();
     return;
   }
 
-  const q = practiceQueue[practiceIndex];
-  card.innerHTML = renderQuestionCard(q, practiceIndex + 1, practiceQueue.length, practiceAnswered, practiceUserAnswer, false);
+  const q = quizQueue[quizIndex];
+  const ans = quizAnswers[quizIndex];
+  card.innerHTML = renderQuestionCard(q, quizIndex + 1, quizQueue.length, ans.answered, ans.userAnswer, false, 'answerQuizPractice', 'nextQuizPracticeQuestion');
 }
 
-function practiceUnansweredCompletionCard() {
-  const scopeFiltered = questions.filter(q => {
-    if (practiceFilters.topic !== 'all' && q.topic !== practiceFilters.topic) return false;
-    if (practiceFilters.type !== 'all' && q.type !== practiceFilters.type) return false;
-    return true;
-  });
-  const total = scopeFiltered.length;
-  const answered = scopeFiltered.filter(q => {
-    const s = progress[q.id];
-    return s && ((s.correct_count || 0) + (s.wrong_count || 0)) > 0;
-  }).length;
-  const pct = total > 0 ? Math.round(answered / total * 100) : 0;
-  return `
-    <div class="bg-white rounded-2xl p-10 text-center shadow-sm border border-gray-100">
-      <div class="text-2xl mb-2">✓</div>
-      <div class="font-semibold text-gray-700 mb-1">未答過題已全部作答完畢！</div>
-      <div class="text-sm text-gray-500 mb-3">已答題進度：${answered} / ${total} 題</div>
-      <div class="w-full bg-gray-100 rounded-full h-2 mb-2">
-        <div class="bg-blue-500 h-2 rounded-full" style="width:${pct}%"></div>
+function answerQuizPractice(answer) {
+  const ans = quizAnswers[quizIndex];
+  if (ans.answered) return;
+  const q = quizQueue[quizIndex];
+  const isCorrect = answer === q.answer;
+  updateQuestionStats(q.id, isCorrect);
+  quizAnswers[quizIndex] = { answered: true, userAnswer: answer };
+  renderQuizPracticeCard();
+}
+
+function nextQuizPracticeQuestion() {
+  quizIndex++;
+  renderQuizPracticeCard();
+}
+
+function renderQuizTakingExam(container) {
+  container.innerHTML = `
+    <div class="max-w-2xl mx-auto">
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="text-xl font-bold text-gray-800">刷題練習</h2>
+        <span class="text-sm text-gray-500">本次測驗 ${quizQueue.length} 題</span>
       </div>
-      <div class="text-2xl font-bold text-blue-600 mb-6">${pct}%</div>
-      <button onclick="initPracticeQueue()"
-        class="px-6 py-2.5 bg-blue-600 text-white rounded-xl text-sm font-medium hover:bg-blue-700">
-        重新出題
-      </button>
+      <div id="quiz-card"></div>
+    </div>
+  `;
+  renderQuizExamCard();
+}
+
+function renderQuizExamCard() {
+  const card = document.getElementById('quiz-card');
+  if (!card) return;
+
+  const q = quizQueue[quizIndex];
+  const ans = quizAnswers[quizIndex];
+  const typeLabel = q.type === 'tf' ? '是非題' : '選擇題';
+  const progressPct = Math.round((quizIndex + 1) / quizQueue.length * 100);
+
+  let optionsHTML = '';
+  if (q.type === 'tf') {
+    optionsHTML = `
+      <div class="grid grid-cols-2 gap-3 mt-5">
+        ${['X', 'O'].map(val => {
+          const isSelected = val === ans.userAnswer;
+          const cls = isSelected
+            ? 'option-btn py-3.5 border-2 border-blue-500 bg-blue-50 text-blue-700 rounded-xl text-sm font-medium'
+            : 'option-btn py-3.5 border-2 border-gray-200 rounded-xl text-sm font-medium text-gray-700 hover:border-blue-400 hover:bg-blue-50';
+          return `<button onclick="selectQuizExamAnswer('${val}')" class="${cls}">${val === 'O' ? '○ 正確' : '✗ 錯誤'}</button>`;
+        }).join('')}
+      </div>`;
+  } else {
+    const opts = q.options || [];
+    optionsHTML = `<div class="space-y-2.5 mt-5">
+      ${opts.map((opt, i) => {
+        const val = String(i + 1);
+        const isSelected = val === ans.userAnswer;
+        const cls = isSelected
+          ? 'option-btn w-full text-left py-3 px-4 border-2 border-blue-500 bg-blue-50 text-blue-700 rounded-xl text-sm font-medium'
+          : 'option-btn w-full text-left py-3 px-4 border-2 border-gray-200 rounded-xl text-sm text-gray-700 hover:border-blue-400 hover:bg-blue-50';
+        return `<button onclick="selectQuizExamAnswer('${val}')" class="${cls}">
+          <span class="font-semibold mr-2 ${isSelected ? 'text-blue-400' : 'text-gray-400'}">(${i + 1})</span>${escapeHtml(opt)}
+        </button>`;
+      }).join('')}
+    </div>`;
+  }
+
+  card.innerHTML = `
+    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+      <div class="px-5 pt-2 pb-0">
+        <div class="h-1 bg-gray-100 rounded-full mt-2">
+          <div class="h-1 bg-blue-300 rounded-full transition-all" style="width:${progressPct}%"></div>
+        </div>
+      </div>
+      <div class="px-5 py-3 flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          <span class="text-xs text-gray-400 bg-gray-50 px-2 py-0.5 rounded-full">${typeLabel}</span>
+          <span class="text-xs text-gray-400 truncate max-w-[160px]">${escapeHtml(q.topic)}</span>
+        </div>
+        <span class="text-xs text-gray-400 shrink-0">${quizIndex + 1} / ${quizQueue.length}</span>
+      </div>
+      <div class="px-5 pb-5">
+        <p class="text-gray-800 text-sm leading-relaxed">${escapeHtml(q.question)}</p>
+        ${optionsHTML}
+        <div class="mt-5 pt-4 border-t border-gray-100 flex gap-2">
+          <button onclick="quizExamPrev()" ${quizIndex === 0 ? 'disabled' : ''}
+            class="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed">← 上一題</button>
+          <button onclick="quizExamNext()" ${quizIndex === quizQueue.length - 1 ? 'disabled' : ''}
+            class="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed">下一題 →</button>
+        </div>
+        <button onclick="submitQuizExam()"
+          class="mt-2 w-full py-2.5 bg-blue-600 text-white rounded-xl text-sm font-medium hover:bg-blue-700">交卷 ✓</button>
+      </div>
     </div>`;
 }
 
-function answerPractice(answer) {
-  if (practiceAnswered) return;
-  const q = practiceQueue[practiceIndex];
-  const isCorrect = answer === q.answer;
-  updateQuestionStats(q.id, isCorrect);
-  practiceAnswered = true;
-  practiceUserAnswer = answer;
-  renderPracticeCard();
+function selectQuizExamAnswer(answer) {
+  quizAnswers[quizIndex] = { answered: true, userAnswer: answer };
+  renderQuizExamCard();
 }
 
-function nextPracticeQuestion() {
-  practiceIndex++;
-  practiceAnswered = false;
-  practiceUserAnswer = null;
-  renderPracticeCard();
+function quizExamPrev() {
+  if (quizIndex > 0) { quizIndex--; renderQuizExamCard(); }
+}
+
+function quizExamNext() {
+  if (quizIndex < quizQueue.length - 1) { quizIndex++; renderQuizExamCard(); }
+}
+
+function submitQuizExam() {
+  const hasUnanswered = quizAnswers.some(a => !a.answered);
+  if (hasUnanswered && !confirm('尚有題目未作答，確定要交卷嗎？')) return;
+  quizQueue.forEach((q, i) => {
+    const isCorrect = quizAnswers[i].userAnswer === q.answer;
+    updateQuestionStats(q.id, isCorrect);
+  });
+  finishQuiz();
+}
+
+function finishQuiz() {
+  const total = quizQueue.length;
+  let correct = 0;
+  const topicStats = {};
+  quizQueue.forEach((q, i) => {
+    const isCorrect = quizAnswers[i].userAnswer === q.answer;
+    if (isCorrect) correct++;
+    if (!topicStats[q.topic]) topicStats[q.topic] = { correct: 0, total: 0 };
+    topicStats[q.topic].total++;
+    if (isCorrect) topicStats[q.topic].correct++;
+  });
+  const wrong = total - correct;
+  const pct = total > 0 ? Math.round(correct / total * 100) : 0;
+  const details = quizQueue.map((q, i) => ({
+    q,
+    userAnswer: quizAnswers[i].userAnswer,
+    isCorrect: quizAnswers[i].userAnswer === q.answer,
+  }));
+  quizResults = { total, correct, wrong, pct, topicStats, mode: quizConfig.mode, details };
+  quizDetailFilter = 'wrong';
+
+  if (quizConfig.mode === 'exam' && total > 0) {
+    examHistory.push({ date: todayStr(), correct, total });
+    saveExamHistory();
+  }
+
+  renderQuizResults(document.getElementById('app-content'));
+}
+
+function buildQuizSuggestion(results) {
+  if (results.pct >= 80) return '🎉 表現很棒，繼續保持這個節奏！';
+  let weakest = null, weakestPct = Infinity;
+  for (const [topic, s] of Object.entries(results.topicStats)) {
+    if (s.total === 0) continue;
+    const pct = s.correct / s.total * 100;
+    if (pct < weakestPct) { weakest = topic; weakestPct = pct; }
+  }
+  return weakest
+    ? `💡 別氣餒，再接再厲！這次「${escapeHtml(weakest)}」較弱，建議加強複習。`
+    : '💡 別氣餒，再接再厲！';
+}
+
+function formatQuizAnswer(q, val) {
+  if (val === null || val === undefined) return '（未作答）';
+  if (q.type === 'tf') return val === 'O' ? '○ 正確' : '✗ 錯誤';
+  const opt = (q.options || [])[Number(val) - 1];
+  return `(${val}) ${escapeHtml(opt || '')}`;
+}
+
+function renderQuizDetailRow(detail, num) {
+  const { q, userAnswer, isCorrect } = detail;
+  const typeLabel = q.type === 'tf' ? '是非題' : '選擇題';
+  const statusBadge = userAnswer === null
+    ? `<span class="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full">未作答</span>`
+    : isCorrect
+      ? `<span class="text-xs bg-green-50 text-green-600 px-2 py-0.5 rounded-full">✓ 答對</span>`
+      : `<span class="text-xs bg-red-50 text-red-500 px-2 py-0.5 rounded-full">✗ 答錯</span>`;
+
+  const userAnswerHTML = formatQuizAnswer(q, userAnswer);
+  const correctAnswerRow = !isCorrect
+    ? `<div class="text-xs text-green-600 mt-0.5">正確答案：${formatQuizAnswer(q, q.answer)}</div>`
+    : '';
+
+  const lawHTML = q.law_ref
+    ? `<span class="inline-flex items-center gap-1 text-xs bg-blue-50 text-blue-600 px-2.5 py-0.5 rounded-full">📖 ${escapeHtml(q.law_ref)}</span>`
+    : '<span></span>';
+
+  return `
+    <div class="py-3 border-b border-gray-50 last:border-0">
+      <div class="flex items-center gap-2 mb-1.5 flex-wrap">
+        <span class="text-xs text-gray-400 shrink-0">#${num}</span>
+        <span class="text-xs text-gray-400 bg-gray-50 px-2 py-0.5 rounded-full">${typeLabel}</span>
+        <span class="text-xs text-gray-400 truncate max-w-[140px]">${escapeHtml(q.topic)}</span>
+        ${statusBadge}
+      </div>
+      <p class="text-sm text-gray-800 leading-relaxed mb-1.5 text-left">${escapeHtml(q.question)}</p>
+      <div class="text-xs ${isCorrect ? 'text-gray-500' : 'text-red-500'} text-left">你的答案：${userAnswerHTML}</div>
+      <div class="text-left">${correctAnswerRow}</div>
+      <div class="flex items-center justify-between mt-2">
+        ${lawHTML}
+        <button onclick="showAIModal('${q.id}')"
+          class="text-xs px-3 py-1.5 border border-blue-200 text-blue-600 rounded-lg hover:bg-blue-50">🤖 AI 解析</button>
+      </div>
+    </div>`;
+}
+
+function setQuizDetailFilter(filter) {
+  quizDetailFilter = filter;
+  renderQuizResults(document.getElementById('app-content'));
+}
+
+function renderQuizResults(container) {
+  const r = quizResults;
+  const accCol = accColor(r.pct);
+  const suggestion = buildQuizSuggestion(r);
+
+  const topicRows = Object.entries(r.topicStats).map(([topic, s]) => {
+    const pct = s.total > 0 ? Math.round(s.correct / s.total * 100) : 0;
+    return `
+      <div class="flex items-center justify-between py-2 border-b border-gray-50 last:border-0">
+        <span class="text-sm text-gray-700 truncate pr-3">${escapeHtml(topic)}</span>
+        <span class="text-sm text-gray-500 shrink-0">${s.correct} / ${s.total}　${pct}%</span>
+      </div>`;
+  }).join('');
+
+  let detailSection = '';
+  if (r.mode === 'exam') {
+    const wrongCount = r.details.filter(d => !d.isCorrect).length;
+    const rowsData = r.details
+      .map((d, i) => ({ d, num: i + 1 }))
+      .filter(x => quizDetailFilter === 'all' || !x.d.isCorrect);
+    const rowsHTML = rowsData.map(x => renderQuizDetailRow(x.d, x.num)).join('');
+
+    const filterPills = ['wrong', 'all'].map(f => {
+      const active = quizDetailFilter === f;
+      const label = f === 'wrong' ? `只看答錯 (${wrongCount})` : `全部 (${r.total})`;
+      const cls = active
+        ? 'bg-blue-50 text-blue-700 border-blue-500 font-medium'
+        : 'text-gray-600 border-gray-200';
+      const roundedCls = f === 'wrong' ? 'rounded-l-xl' : 'rounded-r-xl border-l-0';
+      return `<button onclick="setQuizDetailFilter('${f}')" class="px-3 py-1.5 border text-xs ${roundedCls} ${cls}">${label}</button>`;
+    }).join('');
+
+    detailSection = `
+      <div class="text-left mt-6 pt-6 border-t border-gray-100">
+        <div class="text-sm font-semibold text-gray-700 mb-3 text-center">── 本次測驗詳解 ──</div>
+        <div class="flex justify-center gap-0 mb-3">${filterPills}</div>
+        ${rowsData.length === 0
+          ? emptyCard('這次全對，沒有錯題 🎉')
+          : `<div class="border border-gray-100 rounded-xl px-4">${rowsHTML}</div>`}
+      </div>`;
+  }
+
+  container.innerHTML = `
+    <div class="max-w-2xl mx-auto">
+      <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-8 text-center">
+        <div class="text-3xl mb-2">🎉</div>
+        <div class="text-lg font-bold text-gray-800 mb-1">測驗結束！</div>
+        <div class="text-sm text-gray-400 mb-5">本次測驗：${r.total} 題</div>
+
+        <div class="flex items-center justify-center gap-6 mb-5">
+          <span class="text-sm text-green-600 font-medium">✓ 答對 ${r.correct} 題</span>
+          <span class="text-sm text-red-500 font-medium">✗ 答錯 ${r.wrong} 題</span>
+        </div>
+
+        <div class="text-4xl font-bold ${accCol.text} mb-2">正確率 ${r.pct}%</div>
+        <div class="w-full bg-gray-100 rounded-full h-2 mb-5 max-w-sm mx-auto">
+          <div class="${accCol.bar} h-2 rounded-full" style="width:${r.pct}%"></div>
+        </div>
+
+        <div class="text-sm text-gray-600 bg-gray-50 rounded-xl px-4 py-3 mb-6 text-left">${suggestion}</div>
+
+        <div class="text-left mb-6">
+          <div class="text-sm font-semibold text-gray-700 mb-2 text-center">── 章節表現 ──</div>
+          ${topicRows}
+        </div>
+
+        ${detailSection}
+
+        <div class="flex flex-wrap gap-2 justify-center${detailSection ? ' mt-6' : ''}">
+          <button onclick="beginQuizRound()" class="px-5 py-2.5 bg-blue-600 text-white rounded-xl text-sm font-medium hover:bg-blue-700">重新測驗</button>
+          <button onclick="navigate('quiz')" class="px-5 py-2.5 border border-gray-200 text-gray-600 rounded-xl text-sm font-medium hover:bg-gray-50">回設定畫面</button>
+        </div>
+      </div>
+    </div>
+  `;
 }
 
 // =====================================================================
@@ -1019,7 +1386,7 @@ function nextReviewQuestion() {
 // =====================================================================
 // SHARED QUESTION CARD RENDERER
 // =====================================================================
-function renderQuestionCard(q, num, total, answered, userAnswer, isReview) {
+function renderQuestionCard(q, num, total, answered, userAnswer, isReview, answerFnName = null, nextFnName = null) {
   const s = progress[q.id] || {};
   const typeLabel = q.type === 'tf' ? '是非題' : '選擇題';
   const wrongBadge = (s.wrong_count || 0) > 0
@@ -1029,8 +1396,8 @@ function renderQuestionCard(q, num, total, answered, userAnswer, isReview) {
     ? `<span class="text-xs bg-green-50 text-green-600 px-2 py-0.5 rounded-full">★ 已熟練</span>`
     : '';
 
-  const answerFn = isReview ? 'answerReview' : 'answerPractice';
-  const nextFn = isReview ? 'nextReviewQuestion' : 'nextPracticeQuestion';
+  const answerFn = isReview ? (answerFnName || 'answerReview') : answerFnName;
+  const nextFn = isReview ? (nextFnName || 'nextReviewQuestion') : nextFnName;
   const progressPct = Math.round(num / total * 100);
 
   let optionsHTML = '';
@@ -1062,7 +1429,7 @@ function renderQuestionCard(q, num, total, answered, userAnswer, isReview) {
     if (q.type === 'tf') {
       optionsHTML = `
         <div class="grid grid-cols-2 gap-3 mt-5">
-          ${['O', 'X'].map(val => {
+          ${['X', 'O'].map(val => {
             const isUserPick = val === userAnswer;
             const isCorrectAns = val === q.answer;
             let cls = 'border-2 rounded-xl py-3.5 text-sm font-medium ';
