@@ -5,6 +5,8 @@ let questions = [];
 let progress = {};
 let attemptLog = []; // [{ date: 'YYYY-MM-DD', correct: bool }, ...]
 let examHistory = []; // [{ date: 'YYYY-MM-DD', correct: number, total: number }, ...]
+let tags = {}; // { [questionId]: string[] }
+let currentView = 'dashboard';
 
 let reviewQueue = [];
 let reviewIndex = 0;
@@ -12,7 +14,10 @@ let reviewAnswered = false;
 let reviewUserAnswer = null;
 let reviewFilters = { topics: [], order: 'srs' };
 
-let quizConfig = { topics: [], count: 20, type: 'mixed', mode: 'practice' }; // mode: 'practice' | 'exam'
+let readingTagFilter = [];
+let categoryTagFilter = [];
+
+let quizConfig = { topics: [], count: 20, type: 'mixed', mode: 'practice', tags: [] }; // mode: 'practice' | 'exam'
 let quizQueue = [];
 let quizIndex = 0;
 let quizAnswers = []; // parallel to quizQueue: { answered: bool, userAnswer: string|null }
@@ -172,6 +177,39 @@ function saveExamHistory() {
   localStorage.setItem('ppa_exam_history', JSON.stringify(examHistory));
 }
 
+function loadTags() {
+  try {
+    tags = JSON.parse(localStorage.getItem('ppa_tags') || '{}');
+  } catch {
+    tags = {};
+  }
+}
+
+function saveTags() {
+  localStorage.setItem('ppa_tags', JSON.stringify(tags));
+}
+
+function getAllTags() {
+  return [...new Set(Object.values(tags).flat())].sort();
+}
+
+function addTag(qId, name) {
+  const trimmed = name.trim();
+  if (!trimmed) return;
+  if (!tags[qId]) tags[qId] = [];
+  if (!tags[qId].includes(trimmed)) {
+    tags[qId].push(trimmed);
+    saveTags();
+  }
+}
+
+function removeTag(qId, name) {
+  if (!tags[qId]) return;
+  tags[qId] = tags[qId].filter(t => t !== name);
+  if (tags[qId].length === 0) delete tags[qId];
+  saveTags();
+}
+
 function updateQuestionStats(id, isCorrect) {
   logAttempt(isCorrect);
   const today = todayStr();
@@ -270,6 +308,7 @@ function closeMobileMenu() {
 // NAVIGATION
 // =====================================================================
 function navigate(view) {
+  currentView = view;
   closeMobileMenu();
 
   if (typeof gtag !== 'undefined') {
@@ -333,19 +372,70 @@ function renderReading(container) {
   container.innerHTML = `
     <div class="max-w-2xl mx-auto space-y-4 py-2">
       <h2 class="text-xl font-bold text-gray-800 px-1">題目搜尋</h2>
-      <input type="text" id="reading-search" oninput="onReadingSearch()" placeholder="搜尋題目關鍵字..."
-        class="w-full px-3 py-2 border border-gray-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-200">
+      <div class="flex items-center gap-2">
+        <input type="text" id="reading-search" oninput="onReadingSearch()" placeholder="搜尋題目關鍵字..."
+          class="flex-1 min-w-0 px-3 py-2 border border-gray-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-200">
+        <span id="reading-tag-dropdown-slot"></span>
+      </div>
       <div id="reading-count" class="text-xs text-gray-400 px-1"></div>
       <div id="reading-list" class="space-y-4"></div>
     </div>
   `;
-  renderReadingList(questions);
+
+  syncReadingTagDropdownSlot();
+  onReadingSearch();
+}
+
+// 標籤字典可能在使用者停留於本頁時新增/移除（例如展開卡片新增第一個標籤），
+// 需要重新同步這個下拉篩選器的有無與選項，而不是只在整頁重新掛載時才建立一次。
+function syncReadingTagDropdownSlot() {
+  const slot = document.getElementById('reading-tag-dropdown-slot');
+  if (!slot) return;
+  const allTags = getAllTags();
+  if (allTags.length === 0) {
+    slot.innerHTML = '';
+    return;
+  }
+  slot.innerHTML = renderTagDropdownHTML('reading', allTags);
+  restoreTagDropdownState('reading', allTags, readingTagFilter);
+  updateTagDropdownLabel('reading');
+  setupTagDropdownOutsideClick('reading-tag-dropdown-container', 'reading-tag-dropdown-panel');
 }
 
 function onReadingSearch() {
   const term = document.getElementById('reading-search').value.trim();
-  const filtered = term ? questions.filter(q => q.question.includes(term)) : questions;
+  const tagCbs = [...document.querySelectorAll('.reading-tag-cb')];
+  if (tagCbs.length > 0) {
+    readingTagFilter = tagCbs.filter(cb => cb.checked).map(cb => cb.value);
+  }
+
+  let filtered = term ? questions.filter(q => q.question.includes(term)) : questions;
+  if (readingTagFilter.length > 0) {
+    filtered = filtered.filter(q => (tags[q.id] || []).some(t => readingTagFilter.includes(t)));
+  }
   renderReadingList(filtered, term);
+}
+
+function toggleReadingTagDropdown() {
+  document.getElementById('reading-tag-dropdown-panel').classList.toggle('hidden');
+}
+
+function onReadingTagAllChange() {
+  const allCb = document.getElementById('reading-tag-all-cb');
+  document.querySelectorAll('.reading-tag-cb').forEach(cb => { cb.checked = allCb.checked; });
+  allCb.indeterminate = false;
+  updateTagDropdownLabel('reading');
+  onReadingSearch();
+}
+
+function onReadingTagCbChange() {
+  const cbs = [...document.querySelectorAll('.reading-tag-cb')];
+  const n = cbs.filter(cb => cb.checked).length;
+  const allCb = document.getElementById('reading-tag-all-cb');
+  allCb.checked = n === cbs.length;
+  allCb.indeterminate = n > 0 && n < cbs.length;
+  updateTagDropdownLabel('reading');
+  onReadingSearch();
 }
 
 function renderReadingList(list, term = '') {
@@ -389,7 +479,127 @@ function renderQuestionDetail(q) {
     ${optionsHTML}
     <div class="mt-3 pt-3 border-t border-gray-100 text-sm text-gray-600">
       答案：<span class="font-semibold text-blue-600">${answerText}</span>${lawHTML}
+    </div>
+    ${renderTagsSection(q.id, false)}`;
+}
+
+// 題目搜尋／題目總覽共用的標籤編輯區塊
+function renderTagsSection(qId, adding) {
+  const qTags = tags[qId] || [];
+  const pills = qTags.map(t => `
+    <span class="inline-flex items-center gap-1 text-xs bg-purple-50 text-purple-600 px-2 py-0.5 rounded-full">
+      ${escapeHtml(t)}
+      <button data-qid="${escapeHtml(qId)}" data-tag="${escapeHtml(t)}" onclick="event.stopPropagation(); onRemoveTagClick(this)"
+        class="hover:text-purple-900 leading-none">✕</button>
+    </span>`).join('');
+
+  const datalistId = `tag-suggestions-${qId}`;
+  const suggestions = getAllTags().map(t => `<option value="${escapeHtml(t)}">`).join('');
+
+  const addUI = adding
+    ? `
+      <input type="text" id="tag-input-${qId}" list="${datalistId}" placeholder="輸入標籤名稱"
+        class="text-xs border border-gray-200 rounded-full px-2 py-0.5 w-28 focus:outline-none focus:ring-1 focus:ring-purple-300"
+        onkeydown="if(event.key==='Enter'){event.preventDefault(); onAddTagSubmit('${qId}');}">
+      <datalist id="${datalistId}">${suggestions}</datalist>
+      <button onclick="event.stopPropagation(); onAddTagSubmit('${qId}')" class="text-xs text-purple-600">✓</button>
+      <button onclick="event.stopPropagation(); refreshTagsSection('${qId}', false)" class="text-xs text-gray-400">✕</button>`
+    : `<button onclick="event.stopPropagation(); refreshTagsSection('${qId}', true)"
+        class="text-xs text-gray-400 border border-dashed border-gray-300 rounded-full px-2 py-0.5 hover:border-purple-400 hover:text-purple-600">+ 標籤</button>`;
+
+  return `<div id="tags-${qId}" class="flex flex-wrap items-center gap-1.5 mt-3" onclick="event.stopPropagation()">🏷️ ${pills} ${addUI}</div>`;
+}
+
+function refreshTagsSection(qId, adding) {
+  const el = document.getElementById(`tags-${qId}`);
+  if (!el) return;
+  el.outerHTML = renderTagsSection(qId, adding);
+  if (adding) document.getElementById(`tag-input-${qId}`)?.focus();
+}
+
+function onAddTagSubmit(qId) {
+  const input = document.getElementById(`tag-input-${qId}`);
+  if (!input) return;
+  addTag(qId, input.value);
+  refreshTagsSection(qId, false);
+  syncTagDropdownForCurrentView();
+}
+
+function onRemoveTagClick(btn) {
+  removeTag(btn.dataset.qid, btn.dataset.tag);
+  refreshTagsSection(btn.dataset.qid, false);
+  syncTagDropdownForCurrentView();
+}
+
+// 標籤字典（getAllTags()）可能因為剛才的增刪而改變，同步當前頁面的標籤篩選下拉
+function syncTagDropdownForCurrentView() {
+  if (currentView === 'reading') syncReadingTagDropdownSlot();
+  else if (currentView === 'category') syncCategoryTagDropdownSlot();
+}
+
+// 題目總覽收合列用的唯讀標籤提示
+function tagHintHTML(qId) {
+  const t = tags[qId] || [];
+  if (t.length === 0) return '';
+  const extra = t.length > 1 ? ` +${t.length - 1}` : '';
+  return `<span class="text-xs text-purple-500 shrink-0">🏷️${escapeHtml(t[0])}${extra}</span>`;
+}
+
+// 題目搜尋／題目總覽共用的「標籤：全部 ▾」下拉核取方塊清單，prefix 區分頁面（reading/category）
+function renderTagDropdownHTML(prefix, allTags) {
+  return `
+    <div class="relative shrink-0" id="${prefix}-tag-dropdown-container">
+      <button onclick="toggle${prefix[0].toUpperCase()}${prefix.slice(1)}TagDropdown()" id="${prefix}-tag-dropdown-btn"
+        class="flex items-center gap-1 px-3 py-2 border border-gray-200 rounded-xl text-sm bg-white hover:border-blue-300 focus:outline-none focus:ring-2 focus:ring-blue-200 whitespace-nowrap">
+        <span id="${prefix}-tag-dropdown-label">標籤：全部</span>
+        <svg xmlns="http://www.w3.org/2000/svg" class="h-3.5 w-3.5 text-gray-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+        </svg>
+      </button>
+      <div id="${prefix}-tag-dropdown-panel" class="hidden absolute z-20 top-full mt-1 right-0 bg-white border border-gray-200 rounded-xl shadow-lg p-2 w-56 max-h-64 overflow-y-auto">
+        <label class="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-gray-50 cursor-pointer select-none">
+          <input type="checkbox" id="${prefix}-tag-all-cb" onchange="on${prefix[0].toUpperCase()}${prefix.slice(1)}TagAllChange()">
+          <span class="text-sm font-medium text-gray-700">全選</span>
+        </label>
+        <div class="border-t border-gray-100 my-1"></div>
+        ${allTags.map(t => `
+          <label class="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-gray-50 cursor-pointer select-none">
+            <input type="checkbox" class="${prefix}-tag-cb" value="${escapeHtml(t)}" onchange="on${prefix[0].toUpperCase()}${prefix.slice(1)}TagCbChange()">
+            <span class="text-sm text-gray-700 truncate" title="${escapeHtml(t)}">${escapeHtml(t)}</span>
+          </label>`).join('')}
+      </div>
     </div>`;
+}
+
+function restoreTagDropdownState(prefix, allTags, filterArr) {
+  document.querySelectorAll(`.${prefix}-tag-cb`).forEach(cb => {
+    cb.checked = filterArr.includes(cb.value);
+  });
+  const checkedCount = [...document.querySelectorAll(`.${prefix}-tag-cb`)].filter(cb => cb.checked).length;
+  const allCb = document.getElementById(`${prefix}-tag-all-cb`);
+  allCb.checked = checkedCount === allTags.length;
+  allCb.indeterminate = checkedCount > 0 && checkedCount < allTags.length;
+}
+
+function updateTagDropdownLabel(prefix) {
+  const cbs = [...document.querySelectorAll(`.${prefix}-tag-cb`)];
+  const n = cbs.filter(cb => cb.checked).length;
+  const label = document.getElementById(`${prefix}-tag-dropdown-label`);
+  if (!label) return;
+  label.textContent = n === 0 ? '標籤：全部' : `標籤：${n} 已選`;
+}
+
+let _tagDropdownHandler = null;
+function setupTagDropdownOutsideClick(containerId, panelId) {
+  if (_tagDropdownHandler) document.removeEventListener('click', _tagDropdownHandler);
+  _tagDropdownHandler = (e) => {
+    const cont = document.getElementById(containerId);
+    if (cont && !cont.contains(e.target)) {
+      const panel = document.getElementById(panelId);
+      if (panel) panel.classList.add('hidden');
+    }
+  };
+  document.addEventListener('click', _tagDropdownHandler);
 }
 
 // 在 text 已 escape 的前提下，把符合 term 的片段用 <mark> 包起來
@@ -463,6 +673,7 @@ function renderCategory(container) {
           ${categoryTopics.map((t, ti) => `
             <option value="${ti}">${escapeHtml(t)}（${questions.filter(q => q.topic === t).length}）</option>`).join('')}
         </select>
+        <span id="category-tag-dropdown-slot"></span>
         <button id="category-toggle-all" onclick="toggleAllCategoryRows()"
           class="shrink-0 px-3 py-2 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-100 whitespace-nowrap">
           全部展開
@@ -473,7 +684,22 @@ function renderCategory(container) {
   `;
 
   document.getElementById('category-select').value = categoryActiveIndex;
+  syncCategoryTagDropdownSlot();
   renderCategoryQuestionList();
+}
+
+function syncCategoryTagDropdownSlot() {
+  const slot = document.getElementById('category-tag-dropdown-slot');
+  if (!slot) return;
+  const allTags = getAllTags();
+  if (allTags.length === 0) {
+    slot.innerHTML = '';
+    return;
+  }
+  slot.innerHTML = renderTagDropdownHTML('category', allTags);
+  restoreTagDropdownState('category', allTags, categoryTagFilter);
+  updateTagDropdownLabel('category');
+  setupTagDropdownOutsideClick('category-tag-dropdown-container', 'category-tag-dropdown-panel');
 }
 
 function onCategorySelectChange() {
@@ -481,13 +707,44 @@ function onCategorySelectChange() {
   renderCategoryQuestionList();
 }
 
+function toggleCategoryTagDropdown() {
+  document.getElementById('category-tag-dropdown-panel').classList.toggle('hidden');
+}
+
+function onCategoryTagAllChange() {
+  const allCb = document.getElementById('category-tag-all-cb');
+  document.querySelectorAll('.category-tag-cb').forEach(cb => { cb.checked = allCb.checked; });
+  allCb.indeterminate = false;
+  updateTagDropdownLabel('category');
+  renderCategoryQuestionList();
+}
+
+function onCategoryTagCbChange() {
+  const cbs = [...document.querySelectorAll('.category-tag-cb')];
+  const n = cbs.filter(cb => cb.checked).length;
+  const allCb = document.getElementById('category-tag-all-cb');
+  allCb.checked = n === cbs.length;
+  allCb.indeterminate = n > 0 && n < cbs.length;
+  updateTagDropdownLabel('category');
+  renderCategoryQuestionList();
+}
+
 function renderCategoryQuestionList() {
-  const list = categoryActiveIndex === -1
+  const tagCbs = [...document.querySelectorAll('.category-tag-cb')];
+  if (tagCbs.length > 0) {
+    categoryTagFilter = tagCbs.filter(cb => cb.checked).map(cb => cb.value);
+  }
+
+  let list = categoryActiveIndex === -1
     ? questions
     : questions.filter(q => q.topic === categoryTopics[categoryActiveIndex]);
+  if (categoryTagFilter.length > 0) {
+    list = list.filter(q => (tags[q.id] || []).some(t => categoryTagFilter.includes(t)));
+  }
 
-  document.getElementById('category-list').innerHTML =
-    list.map(q => renderCategoryRow(q, questions.indexOf(q) + 1)).join('');
+  document.getElementById('category-list').innerHTML = list.length === 0
+    ? emptyCard('找不到符合的題目')
+    : list.map(q => renderCategoryRow(q, questions.indexOf(q) + 1)).join('');
   applyCategoryExpandState();
 }
 
@@ -511,6 +768,7 @@ function renderCategoryRow(q, num) {
         class="w-full flex items-center gap-2 px-5 py-2.5 text-left hover:bg-gray-50">
         <span class="text-xs text-gray-400 shrink-0">#${num}</span>
         <span class="text-sm text-gray-700 truncate">${escapeHtml(q.question)}</span>
+        ${tagHintHTML(q.id)}
       </button>
       <div id="cat-row-${num}" class="hidden px-5 pb-4 pt-3 border-t border-gray-100">
         <p class="text-gray-800 text-sm leading-relaxed mb-1">${escapeHtml(q.question)}</p>
@@ -654,6 +912,19 @@ function renderTopicCoverage() {
 function renderQuizSetup(container) {
   const topics = [...new Set(questions.map(q => q.topic))].sort();
   const selectedTopics = quizConfig.topics.length ? quizConfig.topics : topics;
+  const allTags = getAllTags();
+
+  const tagSectionHTML = allTags.length > 0 ? `
+        <div>
+          <div class="text-sm font-semibold text-gray-700 mb-2">選擇標籤（不選＝不限標籤）</div>
+          <div class="flex flex-wrap gap-2">
+            ${allTags.map(t => `
+              <label class="flex items-center gap-1.5 px-2.5 py-1.5 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer select-none">
+                <input type="checkbox" class="quiz-tag-cb" value="${escapeHtml(t)}">
+                <span class="text-sm text-gray-700">${escapeHtml(t)}</span>
+              </label>`).join('')}
+          </div>
+        </div>` : '';
 
   container.innerHTML = `
     <div class="max-w-2xl mx-auto">
@@ -686,7 +957,7 @@ function renderQuizSetup(container) {
           </div>
           <div id="quiz-validation-msg" class="text-xs text-red-500 mt-1.5 hidden">請至少選擇一個章節</div>
         </div>
-
+        ${tagSectionHTML}
         <div>
           <div class="flex items-center justify-between mb-2">
             <div class="text-sm font-semibold text-gray-700">題目數量</div>
@@ -719,6 +990,9 @@ function renderQuizSetup(container) {
 
   document.querySelectorAll('.quiz-topic-cb').forEach(cb => {
     cb.checked = selectedTopics.includes(cb.value);
+  });
+  document.querySelectorAll('.quiz-tag-cb').forEach(cb => {
+    cb.checked = quizConfig.tags.includes(cb.value);
   });
   updateQuizModePills();
   updateQuizTypePills();
@@ -797,6 +1071,8 @@ function onQuizCountChange() {
 function startQuiz() {
   const topicCbs = [...document.querySelectorAll('.quiz-topic-cb')];
   quizConfig.topics = topicCbs.filter(cb => cb.checked).map(cb => cb.value);
+  const tagCbs = [...document.querySelectorAll('.quiz-tag-cb')];
+  quizConfig.tags = tagCbs.filter(cb => cb.checked).map(cb => cb.value);
   const slider = document.getElementById('quiz-count-slider');
   if (slider) quizConfig.count = parseInt(slider.value, 10);
   beginQuizRound();
@@ -809,6 +1085,7 @@ function beginQuizRound() {
   const pool = questions.filter(q => {
     if (!quizConfig.topics.includes(q.topic)) return false;
     if (quizConfig.type !== 'mixed' && q.type !== quizConfig.type) return false;
+    if (quizConfig.tags.length > 0 && !(tags[q.id] || []).some(t => quizConfig.tags.includes(t))) return false;
     return true;
   });
 
@@ -1087,7 +1364,7 @@ function renderQuizResults(container) {
   }).join('');
 
   let detailSection = '';
-  if (r.mode === 'exam') {
+  {
     const wrongCount = r.details.filter(d => !d.isCorrect).length;
     const rowsData = r.details
       .map((d, i) => ({ d, num: i + 1 }))
@@ -1590,6 +1867,100 @@ document.getElementById('exam-date-modal').addEventListener('click', function(e)
   if (e.target === this) closeExamDateModal();
 });
 
+document.getElementById('tag-io-modal').addEventListener('click', function(e) {
+  if (e.target === this) closeTagIOModal();
+});
+
+// =====================================================================
+// TAG IMPORT/EXPORT
+// =====================================================================
+function openTagIOModal() {
+  document.getElementById('tag-export-text').value = JSON.stringify(tags, null, 2);
+  document.getElementById('tag-export-stats').textContent =
+    `目前共 ${getAllTags().length} 個標籤，套用在 ${Object.keys(tags).length} 題上`;
+  document.getElementById('tag-export-status').classList.add('hidden');
+  document.getElementById('tag-import-text').value = '';
+  document.getElementById('tag-import-file').value = '';
+  document.getElementById('tag-import-status').classList.add('hidden');
+  document.getElementById('tag-io-modal').classList.remove('hidden');
+}
+
+function closeTagIOModal() {
+  document.getElementById('tag-io-modal').classList.add('hidden');
+}
+
+function copyTagExport() {
+  const text = document.getElementById('tag-export-text').value;
+  const status = document.getElementById('tag-export-status');
+  const showSuccess = () => {
+    status.classList.remove('hidden');
+    setTimeout(() => status.classList.add('hidden'), 2000);
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(showSuccess).catch(() => {
+      document.getElementById('tag-export-text').select();
+    });
+  } else {
+    document.getElementById('tag-export-text').select();
+    try { document.execCommand('copy'); showSuccess(); } catch {}
+  }
+}
+
+function downloadTagExport() {
+  const text = document.getElementById('tag-export-text').value;
+  const blob = new Blob([text], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `tags-${todayStr()}.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function onTagImportFileChange(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    document.getElementById('tag-import-text').value = reader.result;
+  };
+  reader.readAsText(file);
+}
+
+function importTags() {
+  const raw = document.getElementById('tag-import-text').value;
+  const status = document.getElementById('tag-import-status');
+  let imported;
+  try {
+    imported = JSON.parse(raw);
+  } catch {
+    status.textContent = '✗ JSON 格式錯誤，請確認貼上的內容';
+    status.className = 'text-xs text-center mt-3 text-red-500';
+    return;
+  }
+
+  const mode = document.querySelector('input[name="tag-import-mode"]:checked').value;
+  if (mode === 'overwrite') {
+    tags = imported;
+  } else {
+    for (const [qId, tagList] of Object.entries(imported)) {
+      const merged = new Set([...(tags[qId] || []), ...tagList]);
+      tags[qId] = [...merged];
+    }
+  }
+  saveTags();
+
+  status.textContent = `✓ 已匯入，共套用 ${getAllTags().length} 個標籤於 ${Object.keys(tags).length} 題`;
+  status.className = 'text-xs text-center mt-3 text-green-600';
+  document.getElementById('tag-export-text').value = JSON.stringify(tags, null, 2);
+  document.getElementById('tag-export-stats').textContent =
+    `目前共 ${getAllTags().length} 個標籤，套用在 ${Object.keys(tags).length} 題上`;
+
+  navigate(currentView);
+}
+
 // =====================================================================
 // INIT
 // =====================================================================
@@ -1610,6 +1981,7 @@ function init() {
   questions = window.QUESTIONS;
   loadMasteryThreshold();
   loadProgress();
+  loadTags();
 
   const masteryInput = document.getElementById('mastery-threshold-input');
   if (masteryInput) masteryInput.value = MASTERY_THRESHOLD;
