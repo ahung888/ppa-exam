@@ -17,7 +17,7 @@ let reviewFilters = { topics: [], order: 'srs' };
 let readingTagFilter = [];
 let categoryTagFilter = [];
 
-let quizConfig = { topics: [], count: 20, type: 'mixed', mode: 'practice', tags: [] }; // mode: 'practice' | 'exam'
+let quizConfig = { topics: [], count: 20, type: 'mixed', mode: 'practice', tags: [], order: 'random' }; // mode: 'practice' | 'exam'; order: 'random' | 'unseen'
 let quizQueue = [];
 let quizIndex = 0;
 let quizAnswers = []; // parallel to quizQueue: { answered: bool, userAnswer: string|null }
@@ -963,9 +963,19 @@ function renderQuizSetup(container) {
             <div class="text-sm font-semibold text-gray-700">題目數量</div>
             <span class="text-sm font-semibold text-blue-600"><span id="quiz-count-label">${quizConfig.count}</span> 題</span>
           </div>
-          <input type="range" id="quiz-count-slider" min="5" max="50" step="5" value="${quizConfig.count}"
+          <input type="range" id="quiz-count-slider" min="5" max="100" step="5" value="${quizConfig.count}"
             oninput="onQuizCountChange()" class="w-full accent-blue-600">
-          <div class="flex justify-between text-xs text-gray-400 mt-0.5"><span>5</span><span>50</span></div>
+          <div class="flex justify-between text-xs text-gray-400 mt-0.5"><span>5</span><span>100</span></div>
+        </div>
+
+        <div>
+          <div class="text-sm font-semibold text-gray-700 mb-2">選題方式</div>
+          <div class="flex gap-2">
+            <button id="quiz-order-random" onclick="setQuizOrder('random')"
+              class="flex-1 px-3 py-2 border-2 border-gray-200 rounded-xl text-sm font-medium text-gray-600">隨機出題</button>
+            <button id="quiz-order-unseen" onclick="setQuizOrder('unseen')"
+              class="flex-1 px-3 py-2 border-2 border-gray-200 rounded-xl text-sm font-medium text-gray-600">陌生優先</button>
+          </div>
         </div>
 
         <div>
@@ -996,6 +1006,7 @@ function renderQuizSetup(container) {
   });
   updateQuizModePills();
   updateQuizTypePills();
+  updateQuizOrderPills();
   onQuizTopicCbChange();
 }
 
@@ -1033,6 +1044,24 @@ function setQuizMode(mode) {
 function setQuizType(type) {
   quizConfig.type = type;
   updateQuizTypePills();
+}
+
+function setQuizOrder(order) {
+  quizConfig.order = order;
+  updateQuizOrderPills();
+}
+
+function updateQuizOrderPills() {
+  ['random', 'unseen'].forEach(o => {
+    const btn = document.getElementById(`quiz-order-${o}`);
+    if (!btn) return;
+    const active = quizConfig.order === o;
+    btn.classList.toggle('border-blue-500', active);
+    btn.classList.toggle('bg-blue-50', active);
+    btn.classList.toggle('text-blue-700', active);
+    btn.classList.toggle('border-gray-200', !active);
+    btn.classList.toggle('text-gray-600', !active);
+  });
 }
 
 function onQuizTopicAllChange() {
@@ -1102,7 +1131,19 @@ function beginQuizRound() {
     return;
   }
 
-  quizQueue = shuffle(pool).slice(0, quizConfig.count);
+  let orderedPool;
+  if (quizConfig.order === 'unseen') {
+    orderedPool = shuffle(pool).sort((a, b) => {
+      const aSeen = progress[a.id] && progress[a.id].last_seen ? 1 : 0;
+      const bSeen = progress[b.id] && progress[b.id].last_seen ? 1 : 0;
+      if (aSeen !== bSeen) return aSeen - bSeen; // 從未作答的排最前面
+      if (aSeen === 0) return 0; // 都沒作答過：維持洗牌後的隨機順序
+      return progress[a.id].last_seen.localeCompare(progress[b.id].last_seen); // 都作答過：最久沒作答的排前面
+    });
+  } else {
+    orderedPool = shuffle(pool);
+  }
+  quizQueue = orderedPool.slice(0, quizConfig.count);
   quizAnswers = quizQueue.map(() => ({ answered: false, userAnswer: null }));
   quizIndex = 0;
   quizResults = null;
