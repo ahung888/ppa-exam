@@ -1,4 +1,4 @@
-const CACHE = 'ppa-v6';
+const CACHE = 'ppa-v7';
 const CDN_CACHE = 'ppa-cdn-v1';
 const NETWORK_TIMEOUT_MS = 3000;
 

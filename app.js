@@ -1155,6 +1155,20 @@ function beginQuizRound() {
   }
 }
 
+function retakeSameQuizRound() {
+  const content = document.getElementById('app-content');
+  quizQueue = shuffle(quizQueue);
+  quizAnswers = quizQueue.map(() => ({ answered: false, userAnswer: null }));
+  quizIndex = 0;
+  quizResults = null;
+
+  if (quizConfig.mode === 'practice') {
+    renderQuizTakingPractice(content);
+  } else {
+    renderQuizTakingExam(content);
+  }
+}
+
 function renderQuizTakingPractice(container) {
   container.innerHTML = `
     <div class="max-w-2xl mx-auto">
@@ -1460,6 +1474,7 @@ function renderQuizResults(container) {
 
         <div class="flex flex-wrap gap-2 justify-center${detailSection ? ' mt-6' : ''}">
           <button onclick="beginQuizRound()" class="px-5 py-2.5 bg-blue-600 text-white rounded-xl text-sm font-medium hover:bg-blue-700">重新測驗</button>
+          <button onclick="retakeSameQuizRound()" class="px-5 py-2.5 border border-blue-200 text-blue-600 rounded-xl text-sm font-medium hover:bg-blue-50">原題重測</button>
           <button onclick="navigate('quiz')" class="px-5 py-2.5 border border-gray-200 text-gray-600 rounded-xl text-sm font-medium hover:bg-gray-50">回設定畫面</button>
         </div>
       </div>
